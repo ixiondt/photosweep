@@ -39,12 +39,15 @@ Nothing leaves your network. There is no cloud service and no account.
 
 ## Before you start
 
-- **Nextcloud on the same machine as Docker.** Photo sweep reads the photos
-  straight from Nextcloud's data directory (read-only). A Nextcloud on another
-  host is not supported yet.
-- **A GPU for the model.** On an RTX-class card, `qwen3-vl:8b` takes about
-  3 s per picture: roughly a day and a half for 40,000 photos, once. The page
-  is usable while it runs. On a CPU it is many times slower.
+- **The photo folder readable by Docker.** Photo sweep reads the pictures
+  from disk (read-only); the Nextcloud app password is used only to delete.
+  Any of these works: Nextcloud on the same machine, its data folder shared to
+  the Docker host over NFS or SMB, or the folder synced there by the Nextcloud
+  desktop client. A Nextcloud reachable only over the web is not supported yet.
+- **A GPU somewhere on your network.** Point `OLLAMA_URL` at any Ollama
+  server. On an RTX-class card, `qwen3-vl:8b` takes about 3 s per picture:
+  roughly a day and a half for 40,000 photos, once. The page is usable while it
+  runs. On a CPU it works, many times slower.
 - **Docker with the compose plugin.**
 
 ## Install
@@ -108,7 +111,8 @@ blank wall) all hash alike and land together in Same.
   100, so treat them as a sort order, not a probability. Review before deleting;
   the page is built for that.
 - One library, one Nextcloud user per install.
-- Photos must be readable on the Docker host.
+- Photos must be readable as files on the Docker host (a local folder or a
+  network mount); reading them over WebDAV alone is not built yet.
 
 ## Development
 
