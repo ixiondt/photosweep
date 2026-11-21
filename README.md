@@ -7,7 +7,9 @@ picture shows rather than by file name or bytes. You review the results on one
 page and delete what you choose. Every delete goes to Nextcloud's **Deleted
 files**, so it can be undone.
 
-Nothing leaves your network. There is no cloud service and no account.
+Nothing leaves your network by default. There is no cloud service and no
+account. If you have no GPU, you can point it at a cloud model instead, and it
+will refuse to until you say yes in writing: [No GPU?](#no-gpu-a-cloud-model-read-this-first)
 
 ![Duplicate groups, each led by its best copy](docs/screenshots/duplicates.png)
 
@@ -49,6 +51,67 @@ Nothing leaves your network. There is no cloud service and no account.
   roughly a day and a half for 40,000 photos, once. The page is usable while it
   runs. On a CPU it works, many times slower.
 - **Docker with the compose plugin.**
+
+## No GPU? A cloud model (read this first)
+
+Photo sweep can send its questions to a cloud vision model over the
+OpenAI-compatible API that most providers offer, several with a free tier.
+**Doing so sends a copy of every photo it labels to that company.** That is
+your whole library: family, children, documents, the inside of your home.
+
+- **What leaves:** each photo as a 512-pixel JPEG (1024 for a Recheck), with
+  the question being asked. Nothing else: no file names, no EXIF, no location.
+- **What happens to it is set by the provider's terms, not by Photo sweep.**
+  Free tiers are often paid for with your data: some providers may keep it,
+  have people review it, or use it to improve their models. Paid tiers usually
+  promise more. Read the terms of the plan you actually use.
+- **Free tiers are slow for a library.** They cap requests per minute and per
+  day, and each photo can take three requests (the label, then the blur and
+  clutter questions). At a few hundred a day, 30,000 photos takes months. Set
+  `MODEL_MIN_INTERVAL_S` to stay under the per-minute cap; when the daily cap
+  runs out, the scanner waits and carries on.
+
+**It will not happen by accident.** When the model address is outside your
+network (anything but a loopback, private, link-local or Tailscale-range
+address, and any name that does not resolve), the scanner sends nothing and
+the page says why, until `.env` contains:
+
+```sh
+PHOTOS_LEAVE_THIS_SERVER=yes
+```
+
+From then on, the page shows where your photos are going on every visit.
+Remove the line and restart to stop.
+
+To set it up, put the API key in a file in the data volume and point the model
+settings at the provider:
+
+```sh
+MODEL_API=openai
+MODEL_URL=https://api.provider.example/v1   # the base that /chat/completions hangs off
+MODEL=<a vision model from the provider's list>
+MODEL_KEY_FILE=/data/model.key
+MODEL_MIN_INTERVAL_S=4                      # 15 requests a minute
+PHOTOS_LEAVE_THIS_SERVER=yes
+```
+
+```sh
+docker compose exec web sh -c 'umask 077; cat > /data/model.key'   # paste the key, then Ctrl-D
+```
+
+Base URLs that speak this API, as of November 2026 (check the provider's
+documentation; model names and free limits change often):
+
+| Provider | `MODEL_URL` |
+|---|---|
+| Google Gemini (AI Studio key) | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| Groq | `https://api.groq.com/openai/v1` |
+| OpenRouter (`:free` models) | `https://openrouter.ai/api/v1` |
+
+If a provider refuses the structured-output request, set `MODEL_JSON=object`,
+or `MODEL_JSON=none` to rely on the prompt alone; the answer is checked either
+way. `MODEL_API=openai` also works for a server of your own (LM Studio, vLLM,
+llama.cpp), and one on your network needs no `PHOTOS_LEAVE_THIS_SERVER`.
 
 ## Install
 
@@ -113,6 +176,8 @@ blank wall) all hash alike and land together in Same.
 - One library, one Nextcloud user per install.
 - Photos must be readable as files on the Docker host (a local folder or a
   network mount); reading them over WebDAV alone is not built yet.
+- The prompts were tuned on `qwen3-vl:8b`. A cloud model answers the same
+  questions, but its labels have not been measured against a real library.
 
 ## Development
 

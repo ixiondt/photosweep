@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 import httpx
 from PIL import Image
 
-from . import classify, config, db, dupes, imaging
+from . import classify, config, db, dupes, imaging, remote
 
 log = logging.getLogger("photosweep.scanner")
 _stop = False
@@ -393,6 +393,7 @@ def run(limit=None, sample=False, match=None):
     # GPU otherwise sat idle ~0.5 s an image (2.77 s wall against a 2.27 s
     # model median, measured 2026-11-17). Still one request in flight.
     ahead = None  # (row, future of prepare())
+    refused_logged = False
     with httpx.Client(timeout=httpx.Timeout(config.MODEL_TIMEOUT_S, connect=10.0)) as http, \
             ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch") as pool:
         while not _stop and (limit is None or done < limit):
@@ -404,6 +405,17 @@ def run(limit=None, sample=False, match=None):
                 seen, added, gone = walk(conn)
                 log.info("rewalk seen=%d added=%d gone=%d", seen, added, gone)
                 last_walk = time.monotonic()
+            if not remote.allowed():
+                # A model outside this network, and no yes from the owner: the
+                # local work (walk, sharpness, duplicates) goes on; no photo is sent.
+                if not refused_logged:
+                    log.error("model server %s is outside this network; set PHOTOS_LEAVE_THIS_SERVER=yes "
+                              "to send photos to it. Labelling is off until then.", remote.host())
+                    refused_logged = True
+                if limit is not None:
+                    break
+                time.sleep(60)
+                continue
             if side_due:
                 side_due = False
                 job = next_side(conn)

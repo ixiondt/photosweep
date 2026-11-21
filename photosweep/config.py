@@ -19,12 +19,32 @@ THUMB_PX = int(_env("THUMB_PX", "512"))             # what the model sees and th
 RECHECK_PX = int(_env("RECHECK_PX", "1024"))       # what a Recheck shows the blur question
 VIEW_PX = int(_env("VIEW_PX", "1600"))              # the larger view in the review dialog
 
-# Any server speaking the Ollama chat API: Ollama itself, or a proxy in front
-# of one. The token file is optional; plain Ollama takes no token.
-ROUTER_URL = _env("OLLAMA_URL", _env("ROUTER_URL", "http://ollama:11434")).rstrip("/")
-ROUTER_TOKEN_FILE = _env("OLLAMA_TOKEN_FILE", _env("ROUTER_TOKEN_FILE", ""))
+# The model server. MODEL_API says which protocol it speaks:
+#   ollama  the Ollama chat API: Ollama itself, or a proxy in front of one (default)
+#   openai  an OpenAI-compatible chat completions API: LM Studio, vLLM, or a
+#           cloud service. MODEL_URL is the base that `/chat/completions`
+#           hangs off, e.g. https://api.example.com/v1
+# The token file is optional; plain Ollama takes no token. A cloud service's
+# API key goes in it.
+MODEL_API = _env("MODEL_API", "ollama").strip().lower()
+ROUTER_URL = _env("MODEL_URL", _env("OLLAMA_URL", _env("ROUTER_URL", "http://ollama:11434"))).rstrip("/")
+ROUTER_TOKEN_FILE = _env("MODEL_KEY_FILE", _env("OLLAMA_TOKEN_FILE", _env("ROUTER_TOKEN_FILE", "")))
 MODEL = _env("MODEL", "qwen3-vl:8b")
 MODEL_TIMEOUT_S = float(_env("MODEL_TIMEOUT_S", "180"))
+# openai only: how the JSON answer is asked for. "schema" (structured output),
+# "object" (JSON mode) or "none" (the prompt alone), for services that refuse one.
+MODEL_JSON = _env("MODEL_JSON", "schema").strip().lower()
+# Seconds between model requests at least. Free cloud tiers cap requests per
+# minute: 15 a minute is 4. 0 leaves pacing to the server's 429s.
+MODEL_MIN_INTERVAL_S = float(_env("MODEL_MIN_INTERVAL_S", "0"))
+# A model server outside the local network sees every photo it labels. The
+# scanner refuses one until this is exactly "yes" (remote.py).
+def _is_yes(value):
+    """Only the word yes is consent: not true, 1, y or a typo of yes."""
+    return (value or "").strip().lower() == "yes"
+
+
+PHOTOS_LEAVE_THIS_SERVER = _is_yes(_env("PHOTOS_LEAVE_THIS_SERVER", ""))
 
 NC_BASE = _env("NC_BASE", "")                       # https://cloud.example.com
 NC_USER = _env("NC_USER", "")                       # the Nextcloud user whose files these are

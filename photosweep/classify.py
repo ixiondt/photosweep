@@ -9,8 +9,12 @@ slow for a library of tens of thousands.
 """
 import json
 import os
+import re
+import time
 
 import httpx
+
+from . import config, remote
 
 CATEGORIES = ("photo", "screenshot", "meme", "document", "junk")
 
@@ -213,9 +217,62 @@ def judge_clutter(client, router_url, token, model, image_b64, sample=False):
 def _retry_after(resp):
     value = resp.headers.get("retry-after")
     try:
-        return max(0.0, float(value)) if value else None
+        if value:
+            return max(0.0, float(value))
     except ValueError:
         return None  # an HTTP-date; the caller's own backoff applies
+    # Some cloud services put the wait in the error body instead
+    # ({"error": {"details": [{"retryDelay": "31s"}]}}).
+    match = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', resp.text[:4096])
+    return float(match.group(1)) if match else None
+
+
+def openai_body(body):
+    """The same question as an OpenAI-compatible chat completion: the prompt
+    and the image as content parts, the JSON shape as `response_format` (or
+    not, per MODEL_JSON), and only the sampling fields that API defines."""
+    msg, opts = body["messages"][0], body["options"]
+    out = {
+        "model": body["model"],
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": msg["content"]},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + msg["images"][0]}},
+        ]}],
+        "temperature": opts["temperature"],
+        "max_tokens": opts["num_predict"],
+    }
+    if "top_p" in opts:
+        out["top_p"] = opts["top_p"]
+    if config.MODEL_JSON == "schema":
+        out["response_format"] = {"type": "json_schema", "json_schema": {"name": "answer", "schema": body["format"]}}
+    elif config.MODEL_JSON == "object":
+        out["response_format"] = {"type": "json_object"}
+    return out
+
+
+_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
+
+
+def _unfence(content):
+    """A cloud model asked for JSON by the prompt alone often wraps it in a
+    Markdown code fence; the parsers then see the JSON inside."""
+    if not isinstance(content, str):
+        return content
+    match = _FENCE.match(content)
+    return match.group(1) if match else content
+
+
+_last_request = 0.0
+
+
+def _pace():
+    """Hold to MODEL_MIN_INTERVAL_S between requests. The scanner keeps one
+    request in flight, so a single timestamp is the whole state."""
+    global _last_request
+    gap = config.MODEL_MIN_INTERVAL_S - (time.monotonic() - _last_request)
+    if gap > 0:
+        time.sleep(gap)
+    _last_request = time.monotonic()
 
 
 def classify(client, router_url, token, model, image_b64, sample=False):
@@ -230,8 +287,16 @@ def judge_blur(client, router_url, token, model, image_b64, sample=False):
 
 def _ask(client, router_url, token, body):
     """The message content of one chat call, or RouterUnavailable / BadVerdict."""
+    # The scanner checks this too; checking here as well means no code path
+    # can send a photo outside the network without the owner's yes.
+    if not remote.allowed(router_url):
+        raise RouterUnavailable(f"model server {remote.host(router_url)} is outside this network and "
+                                "PHOTOS_LEAVE_THIS_SERVER is not yes; no photo was sent", 600)
+    openai = config.MODEL_API == "openai"
+    url = f"{router_url}/chat/completions" if openai else f"{router_url}/api/chat"
+    _pace()
     try:
-        resp = client.post(f"{router_url}/api/chat", json=body,
+        resp = client.post(url, json=openai_body(body) if openai else body,
                            headers={"Authorization": f"Bearer {token}"} if token else {})
     except httpx.HTTPError as exc:
         raise RouterUnavailable(f"router unreachable: {type(exc).__name__}") from exc
@@ -242,6 +307,8 @@ def _ask(client, router_url, token, body):
         # is it this file's fault, so it still must not burn the file's attempts.
         raise RouterUnavailable(f"router refused: {resp.status_code} {resp.text[:160]}", 300)
     try:
+        if openai:
+            return _unfence(resp.json()["choices"][0]["message"]["content"])
         return resp.json()["message"]["content"]
-    except (ValueError, KeyError, TypeError) as exc:
-        raise BadVerdict("router body has no message.content") from exc
+    except (ValueError, KeyError, TypeError, IndexError) as exc:
+        raise BadVerdict("model body has no message content") from exc

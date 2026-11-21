@@ -6,7 +6,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from . import config, db, dupes, imaging
+from . import config, db, dupes, imaging, remote
 from .gate import conn, operator
 from .scanner import thumb_path
 
@@ -93,6 +93,7 @@ def summary(request: Request):
         "nextcloudSetUp": config.nextcloud_configured(),
         "signOut": config.AUTH_MODE == "password",
         "model": config.MODEL,
+        "modelRemote": remote.status(),
         "blurMax": config.BLUR_MAX,
         "blurCheck": {"checked": blur_checked, "total": photo_total},
         "clutterCheck": {"checked": clutter_checked, "total": photo_total},

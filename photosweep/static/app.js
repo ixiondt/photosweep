@@ -95,6 +95,18 @@ function blurText(item) {
   return "not checked yet; the pixel score decides";
 }
 
+// A model outside the owner's network sees every photo it labels. Say so on
+// every visit, not once in a settings screen.
+function renderModelNote(m) {
+  const el = $("model-note");
+  if (!m || !m.remote) { el.hidden = true; return; }
+  el.hidden = false;
+  el.dataset.state = m.allowed ? "sending" : "refused";
+  el.textContent = m.allowed
+    ? `Photos are being sent to ${m.host} to be labelled. A small copy of each photo leaves this server, and what that service keeps or trains on is set by its terms, not by Photo sweep.`
+    : `Labelling is off: the model is set to ${m.host}, outside this network, so photos would leave this server. Set PHOTOS_LEAVE_THIS_SERVER=yes to allow it, or point the model at a server of your own.`;
+}
+
 function renderSummary() {
   const s = state.summary;
   if (!s) return;
@@ -118,6 +130,7 @@ function renderSummary() {
   $("nc-btn").textContent = s.nextcloudReady ? "Nextcloud connected" : "Connect Nextcloud";
   $("nc-btn").hidden = !s.nextcloudSetUp;
   $("signout-btn").hidden = !s.signOut;
+  renderModelNote(s.modelRemote);
   renderTiers(s.dupGroups);
   syncDupControls();
   for (const t of TABS) {
