@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Photo sweep</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the photos</a>
+
+<header class="top">
+  <div class="top-inner">
+    <div class="title-block">
+      <h1>Photo sweep</h1>
+      <p class="sub" id="progress-line">Loading…</p>
+    </div>
+    <div class="top-actions">
+      <button class="btn btn-secondary" id="pause-btn" type="button" aria-pressed="false">Pause scan</button>
+      <button class="btn btn-secondary" id="nc-btn" type="button">Connect Nextcloud</button>
+      <button class="btn btn-text" id="signout-btn" type="button" hidden>Sign out</button>
+    </div>
+  </div>
+  <div class="progress" aria-hidden="true"><div class="progress-bar" id="progress-bar"></div></div>
+  <div class="tabs-wrap">
+    <div class="tabs" role="tablist" aria-label="Categories" id="tabs"></div>
+  </div>
+</header>
+
+<main id="main" tabindex="-1">
+  <div class="toolbar">
+    <div class="toolbar-text">
+      <h2 id="tab-title">Screenshots</h2>
+      <p class="tab-note" id="tab-note"></p>
+    </div>
+    <div class="toolbar-controls">
+      <div class="seg" role="group" aria-label="Minimum confidence" id="conf-seg">
+        <button type="button" data-conf="0" aria-pressed="true">Any</button>
+        <button type="button" data-conf="60" aria-pressed="false">60%+</button>
+        <button type="button" data-conf="80" aria-pressed="false">80%+</button>
+        <button type="button" data-conf="95" aria-pressed="false">95%+</button>
+      </div>
+      <div class="seg" role="group" aria-label="Where it came from" id="source-seg">
+        <button type="button" data-source="all" aria-pressed="true">All</button>
+        <button type="button" data-source="camera" aria-pressed="false">Camera</button>
+        <button type="button" data-source="nocamera" aria-pressed="false">No camera</button>
+        <button type="button" data-source="messaging" aria-pressed="false">Messaging</button>
+      </div>
+      <div class="seg" role="group" aria-label="Picture size" id="size-seg">
+        <button type="button" data-size="s" aria-pressed="false">Small</button>
+        <button type="button" data-size="m" aria-pressed="true">Medium</button>
+        <button type="button" data-size="l" aria-pressed="false">Large</button>
+      </div>
+      <div class="seg" role="group" aria-label="How alike" id="tier-seg" hidden>
+        <button type="button" data-tier="same" aria-pressed="true">Same</button>
+        <button type="button" data-tier="similar" aria-pressed="false">Similar</button>
+      </div>
+      <button class="btn btn-text" id="select-all-extras" type="button" hidden>Select all extras</button>
+      <button class="btn btn-text" id="select-shown" type="button">Select all shown</button>
+    </div>
+  </div>
+  <ul class="grid" id="grid"></ul>
+  <div id="sentinel" aria-hidden="true"></div>
+  <div class="empty" id="empty" hidden>
+    <p class="empty-title" id="empty-title">Nothing here yet</p>
+    <p class="empty-body" id="empty-body"></p>
+  </div>
+</main>
+
+<div class="actionbar" id="actionbar" hidden>
+  <div class="actionbar-inner">
+    <p class="sel-line"><strong id="sel-count">0</strong> selected
+      <button class="btn btn-text" id="clear-sel" type="button">Clear</button></p>
+    <div class="actionbar-buttons">
+      <button class="btn btn-secondary" id="recheck-btn" type="button" hidden>Recheck</button>
+      <button class="btn btn-secondary" id="keep-btn" type="button">Keep</button>
+      <button class="btn btn-danger-outline" id="delete-btn" type="button">Delete…</button>
+    </div>
+  </div>
+</div>
+
+<p class="sr-only" role="status" id="live"></p>
+<div class="toast" id="toast" role="alert" hidden></div>
+
+<dialog id="viewer" class="viewer" aria-labelledby="viewer-name">
+  <div class="viewer-frame">
+    <img id="viewer-img" alt="">
+  </div>
+  <div class="viewer-side">
+    <p class="viewer-cat" id="viewer-cat"></p>
+    <h2 class="viewer-name" id="viewer-name"></h2>
+    <p class="viewer-reason" id="viewer-reason"></p>
+    <dl class="viewer-meta" id="viewer-meta"></dl>
+    <div class="viewer-buttons">
+      <button class="btn btn-secondary" id="viewer-prev" type="button" aria-label="Previous image">←</button>
+      <button class="btn btn-primary" id="viewer-select" type="button" aria-pressed="false">Select</button>
+      <button class="btn btn-secondary" id="viewer-next" type="button" aria-label="Next image">→</button>
+    </div>
+    <p class="viewer-keys">Arrow keys move, X selects, Esc closes.</p>
+    <button class="btn btn-text viewer-close" id="viewer-close" type="button">Close</button>
+  </div>
+</dialog>
+
+<dialog id="confirm" class="panel" aria-labelledby="confirm-title">
+  <h2 id="confirm-title">Delete <span id="confirm-count">0</span> images?</h2>
+  <p>They go to Nextcloud’s <strong>Deleted files</strong>, not straight off the disk. You can restore them from there for up to 60 days.</p>
+  <p id="confirm-note" hidden></p>
+  <p class="confirm-warn" id="confirm-warn" hidden></p>
+  <div class="panel-buttons">
+    <button class="btn btn-secondary" id="confirm-cancel" type="button">Cancel</button>
+    <button class="btn btn-danger" id="confirm-ok" type="button">Move to Deleted files</button>
+  </div>
+</dialog>
+
+<dialog id="nc-dialog" class="panel" aria-labelledby="nc-title">
+  <h2 id="nc-title">Connect Nextcloud</h2>
+  <p>Deleting needs an app password, not your real one. In Nextcloud open <strong>Settings → Security</strong>, create an app password named <em>photosweep</em>, and paste it here. It is checked before it is saved, kept only on this server, and you can revoke it from the same page when you are done.</p>
+  <label class="field-label" for="nc-password">App password</label>
+  <input class="field" id="nc-password" type="password" autocomplete="off" spellcheck="false" placeholder="xxxxx-xxxxx-xxxxx-xxxxx-xxxxx">
+  <p class="field-msg" id="nc-msg" role="alert"></p>
+  <div class="panel-buttons">
+    <button class="btn btn-secondary" id="nc-cancel" type="button">Cancel</button>
+    <button class="btn btn-primary" id="nc-save" type="button">Check and save</button>
+  </div>
+</dialog>
+</body>
+</html>

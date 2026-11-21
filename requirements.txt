@@ -1,0 +1,6 @@
+# Pinned to the set the test suite passes against.
+fastapi==0.163.1
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+pillow==13.0.0
+pillow-heif==1.8.1

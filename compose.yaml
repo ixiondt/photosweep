@@ -1,0 +1,47 @@
+# docker compose up -d                     the page and the scanner
+# docker compose --profile ollama up -d    ...and Ollama on an NVIDIA GPU, if you have no Ollama yet
+#
+# Copy .env.example to .env first. Two containers from one image share /data:
+# `web` serves the page, `scanner` walks the photos and asks the model.
+
+x-photosweep: &photosweep
+  build: .
+  image: photosweep:latest
+  user: "${PUID:-33}:${PGID:-33}"
+  env_file: .env
+  volumes:
+    - ${PHOTOS_DIR:?set PHOTOS_DIR in .env}:/photos:ro
+    - data:/data
+  restart: unless-stopped
+
+services:
+  web:
+    <<: *photosweep
+    ports:
+      # Loopback only: put a reverse proxy with HTTPS in front, or change this
+      # to "8087:8087" to reach it from your LAN.
+      - "127.0.0.1:${PORT:-8087}:8087"
+
+  scanner:
+    <<: *photosweep
+    command: ["python", "-m", "photosweep.scanner"]
+    healthcheck:
+      disable: true
+
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  data:
+  ollama:

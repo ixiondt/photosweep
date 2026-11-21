@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in · Photo sweep</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/login.js" defer></script>
+</head>
+<body>
+<main class="signin">
+  <form class="panel signin-panel" id="signin" novalidate>
+    <h1>Photo sweep</h1>
+    <p id="signin-note">Sign in to review your photos.</p>
+    <label class="field-label" for="password">Password</label>
+    <input class="field" id="password" name="password" type="password" autocomplete="current-password" required>
+    <p class="field-msg" id="signin-msg" role="alert"></p>
+    <div class="panel-buttons">
+      <button class="btn btn-primary" id="signin-btn" type="submit">Sign in</button>
+    </div>
+  </form>
+</main>
+</body>
+</html>
