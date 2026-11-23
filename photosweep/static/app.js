@@ -42,7 +42,7 @@ const SOURCES = [
 ];
 
 const state = {
-  tab: "screenshot", minConf: 0, source: "all", tier: "same", groups: 0, bulk: false, items: [], total: 0, loading: false, done: false,
+  tab: "screenshot", minConf: 0, source: "all", tier: "same", mirrored: false, groups: 0, bulk: false, items: [], total: 0, loading: false, done: false,
   selected: new Set(), anchor: null, summary: null, viewerIndex: -1, gen: 0,
 };
 
@@ -141,13 +141,21 @@ function renderSummary() {
     if (s.paused) line += " · paused";
     else if (p.pending && p.perHour) line += ` · about ${fmt(p.perHour)} an hour · ${p.etaHours} h left`;
     else if (p.pending) line += " · waiting for the model";
-    else line += " · scan complete";
+    else if (!(s.questions && s.questions.left)) line += " · scan complete";
+  }
+  const q = s.questions;
+  if (s.visionModel && !printing && !p.pending && q && q.left) {
+    // labelling is done; the blur and clutter questions (re-asks included) are not
+    line += q.rechecks ? ` · re-asking ${fmt(q.rechecks)} for clutter` : " · checking blur and clutter";
+    if (!s.paused && q.perHour) line += `, about ${fmt(q.perHour)} an hour, ${q.etaHours} h left`;
   }
   if (p.deleted) line += ` · ${fmt(p.deleted)} deleted`;
   const b = s.blurCheck;
   if (b && b.total && b.checked < b.total) line += ` · blur check ${fmt(b.checked)} of ${fmt(b.total)} photos`;
   const c = s.clutterCheck;
-  if (c && c.total && c.checked < c.total) line += ` · clutter check ${fmt(c.checked)} of ${fmt(c.total)}`;
+  // re-asks are already on the line above; this is the first pass
+  const firstPass = c ? c.total - c.checked - ((s.questions && s.questions.rechecks) || 0) : 0;
+  if (c && c.total && firstPass > 0) line += ` · clutter check ${fmt(c.total - firstPass)} of ${fmt(c.total)}`;
   $("progress-line").textContent = line;
   $("progress-bar").style.width = `${pct}%`;
   const pause = $("pause-btn");
@@ -228,6 +236,8 @@ function syncDupControls() {
   const n = state.summary && state.summary.dupExtras ? state.summary.dupExtras.same : null;
   $("select-shown").hidden = dupes;
   $("select-all-extras").hidden = !(dupes && state.tier === "same");
+  $("mirror-only").hidden = !(dupes && state.tier === "similar");
+  $("mirror-only").setAttribute("aria-pressed", String(state.mirrored));
   $("select-all-extras").textContent = n != null ? `Select all ${fmt(n)} extras` : "Select all extras";
 }
 
@@ -323,6 +333,7 @@ async function loadMore() {
 const GROUP_PAGE = 30;
 async function loadGroups(gen) {
   const q = new URLSearchParams({ tier: state.tier, offset: state.groups, limit: GROUP_PAGE });
+  if (state.tier === "similar" && state.mirrored) q.set("mirrored", "1");
   const data = await api(`/api/dupes?${q}`);
   if (gen !== state.gen) return;
   const start = state.items.length;
@@ -331,6 +342,7 @@ async function loadGroups(gen) {
   state.groups += data.groups.length;
   state.total = data.total;
   renderTiers({ same: data.counts.same, similar: data.counts.similar });
+  $("mirror-only").textContent = `Mirrored only ${fmt(data.counts.mirrored || 0)}`;
   state.done = state.groups >= data.total || data.groups.length === 0;
   $("grid").append(groupBlocks(state.items.slice(start), start));
   renderEmpty();
@@ -411,7 +423,8 @@ function baseName(rel) { return rel.slice(rel.lastIndexOf("/") + 1); }
 function fmtBytes(n) { return n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`; }
 function dupBadge(item) {
   const dims = item.width && item.height ? `${item.width}×${item.height}` : fmtBytes(item.size);
-  return item.keeper ? `best · ${dims}` : item.kept ? `kept · ${dims}` : dims;
+  const flip = item.mirror ? "mirrored · " : "";
+  return item.keeper ? `best · ${dims}` : item.kept ? `kept · ${flip}${dims}` : `${flip}${dims}`;
 }
 
 function tile(item, index) {
@@ -731,7 +744,7 @@ function renderViewer() {
     const best = state.items.find((x) => x.gid === item.gid && x.keeper);
     rows.push(["File size", fmtBytes(item.size)]);
     rows.push(["Duplicate", item.keeper ? "the best copy in its group"
-      : `${item.tier === "same" ? "a copy" : "a near-repeat"} of ${best ? baseName(best.rel) : "another file"}`]);
+      : `${item.tier === "same" ? "a copy" : item.mirror ? "a mirrored copy" : "a near-repeat"} of ${best ? baseName(best.rel) : "another file"}`]);
   }
   meta.replaceChildren(...rows.flatMap(([k, v]) => {
     const dt = document.createElement("dt"); dt.textContent = k;
@@ -799,6 +812,7 @@ function boot() {
   for (const b of document.querySelectorAll("#tier-seg button")) {
     b.addEventListener("click", () => {
       state.tier = b.dataset.tier;
+      state.mirrored = false;
       renderTiers(state.summary && state.summary.dupGroups);
       syncDupControls();
       resetGrid();
@@ -813,6 +827,11 @@ function boot() {
   }
   $("select-shown").addEventListener("click", selectShown);
   $("select-all-extras").addEventListener("click", selectAllExtras);
+  $("mirror-only").addEventListener("click", () => {
+    state.mirrored = !state.mirrored;
+    syncDupControls();
+    resetGrid();
+  });
   $("clear-sel").addEventListener("click", clearSelection);
   $("keep-btn").addEventListener("click", doKeep);
   $("recheck-btn").addEventListener("click", doRecheck);

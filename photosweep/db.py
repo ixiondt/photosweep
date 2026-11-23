@@ -144,6 +144,12 @@ _ADDED = [
     ("blur_src", "TEXT"),
     # 1 = embedding compared against every other one and its pairs stored
     ("embed_linked", "INTEGER NOT NULL DEFAULT 0"),
+    # imaging.dhash_flipped() of the thumbnail: finds mirrored copies. NULL =
+    # not yet, '' = the thumbnail could not be read
+    ("dhash_flip", "TEXT"),
+    # when the vision model last answered a blur or clutter question for this
+    # row (UTC, the scanned_at format): the status line's pace for re-asks
+    ("asked_at", "TEXT"),
 ]
 
 
@@ -162,6 +168,8 @@ def _migrate(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS files_blur_verdict ON files (status, kept, category, blurry)")
     conn.execute("CREATE INDEX IF NOT EXISTS files_clutter ON files (status, kept, category, clutter)")
     conn.execute("CREATE INDEX IF NOT EXISTS files_unlinked ON files (dup_linked) WHERE dhash IS NOT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS files_unflipped ON files (id) "
+                 "WHERE dhash IS NOT NULL AND dhash_flip IS NULL")
     # the fingerprint stage's queue: on disk, not yet decoded
     conn.execute("CREATE INDEX IF NOT EXISTS files_unprinted ON files (id) WHERE status='pending' AND dhash IS NULL")
     # the embedding backfill's queue: rows from before the classifier
