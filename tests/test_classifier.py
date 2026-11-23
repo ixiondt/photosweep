@@ -264,10 +264,15 @@ def test_train_heads_learns_separable_classes_and_honours_the_owner(tmp_path, mo
                  "VALUES ('own.jpg', 1, 'x', 'done', 'meme', 'classifier', ?)", (vec("photo"),))
     # the owner kept one the model called clutter: it trains as a keeper
     conn.execute("UPDATE files SET kept=1 WHERE rel='241.jpg'")  # the first photo, a clutter one
+    # answers waiting on a Recheck are in doubt, so neither head learns them
+    conn.execute("UPDATE files SET clutter_recheck=1, blur_recheck=1 WHERE rel='244.jpg'")
     rows, X, fold = train_heads.load(str(path))
     assert len(fold) == len(rows) and set(fold.tolist()) <= set(range(train_heads.FOLDS))
     label, clutter, blur = train_heads.sets(rows)
     assert len(label[2]) == n  # own.jpg left out
+    doubt_id = conn.execute("SELECT id FROM files WHERE rel='244.jpg'").fetchone()[0]
+    doubted = [i for i, r in enumerate(rows) if r["id"] == doubt_id]
+    assert doubted and doubted[0] not in clutter[2] and doubted[0] not in blur[2]
     kept_at = [j for j, i in enumerate(clutter[2]) if rows[i]["kept"]]
     assert clutter[3][kept_at[0]] == 0 and clutter[4][kept_at[0]] == train_heads.OWNER_WEIGHT
     out = tmp_path / "heads.npz"

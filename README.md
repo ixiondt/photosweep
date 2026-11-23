@@ -237,7 +237,7 @@ picture. With `MODEL=none` its answers are final. With a vision model set, an
 answer is final only when the classifier is at least `CLASSIFIER_TRUST` sure
 (default 0.95) either way; every other question waits for the vision model, so
 the model's time goes to the hard pictures. On the library below, that settled
-92% of labels, 82% of clutter questions and about half of blur questions
+92% of labels, 88% of clutter questions and about half of blur questions
 without the model. Taken together, the vision model was left with roughly a
 quarter of the questions it would otherwise have been asked.
 
@@ -252,10 +252,17 @@ vision model, which is itself an opinion, not ground truth.
 | Label, overall | 37,519 | **98.2%** agree |
 | photo / screenshot / document / junk / meme | 34,282 / 1,897 / 977 / 135 / 228 | 98.5% / 95.5% / 93.7% / 97.0% / 85.1% agree |
 | Label, when at least 0.95 sure | 92% of pictures | 99.7% agree; 0.28% of real photos called something else |
-| Clutter (13% of photos) | 33,556 | AUC 0.987; at its best guess 88% precision, 82% recall |
-| Clutter, when at least 0.95 sure | 82% of photos | flagged clutter 98% precise; of 245 photos the owner kept, 12 flagged |
+| Clutter (6% of these photos) | 31,073 | AUC 0.986; at its best guess 83% precision, 67% recall |
+| Clutter, when at least 0.95 sure | 88% of photos | flagged clutter 98% precise; of 245 photos the owner kept, 3 flagged |
 | Blur (14% of photos) | 29,204 | AUC 0.892; at its best guess 71% precision, 40% recall |
 | Blur, when at least 0.95 sure | 52% of photos | flagged blurry 97% precise, but few are flagged |
+
+The clutter question was reworded just before training (a room, a repair and
+a child's drawing became keepers), and the vision model's new answers were
+still coming in. Photos waiting for one were left out, so the clutter head
+learned from the owner's deletes and keeps and the model's keeper answers. It
+is cautious for now: when sure it is almost always right, but it settles only
+the plainest clutter itself and leaves the rest to the vision model.
 
 Blur is the weakest question: a thumbnail hides much of what makes a photo
 soft, so with a vision model set, most blur questions still go to it. Memes are
@@ -276,13 +283,14 @@ picture on one shared core):
 Full precision bought nothing over 8 bits. Asking the model by text alone
 ("a screenshot", "a meme"), with no trained head, did badly: it called most
 photos junk. A hidden layer in place of a linear head lifted clutter's AUC from
-0.968 to 0.987 and changed nothing else much.
+0.968 to 0.988 and changed nothing else much.
 
 **Training it on your own library.** The bundled heads were trained on one
 library, so your mix of pictures may differ. Every embedding is stored, and the
 heads can be retrained from your own labels: what the vision model answered
 (never the classifier's own guesses) and what you did, where a photo you kept
-counts as a keeper whatever the model said. It needs a few thousand pictures
+counts as a keeper whatever the model said, and an answer waiting on a
+Recheck is left out. It needs a few thousand pictures
 labelled by a vision model, so it is for libraries that had one at some point.
 
 ```sh

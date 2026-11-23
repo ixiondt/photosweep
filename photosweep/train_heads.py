@@ -8,8 +8,9 @@ prefers over the bundled heads; restart the scanner to load them.
 
 Learns only from what a vision model answered (label_src, clutter_src and
 blur_src not 'classifier') and from what the owner did: a photo they kept is
-a keeper whatever the model said, which is how the 241 photos the owner
-rescued from Clutter teach it where the model was wrong. Every number it
+a keeper whatever the model said, which is how the photos the owner rescued
+from Clutter teach it where the model was wrong. An answer waiting on a
+Recheck is left out: the owner, or a changed question, has put it in doubt. Every number it
 prints is out-of-fold: each picture scored by heads that never saw it, with
 every duplicate group (dup_pairs) kept inside one fold, so a copy in training
 cannot vouch for its twin in testing. Prints counts only, never a path or a
@@ -165,7 +166,8 @@ def load(db_path):
     c = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     c.row_factory = sqlite3.Row
     rows = c.execute(
-        "SELECT id, status, category, clutter, blurry, kept, label_src, clutter_src, blur_src, embedding FROM files "
+        "SELECT id, status, category, clutter, blurry, kept, label_src, clutter_src, blur_src, "
+        "clutter_recheck, blur_recheck, embedding FROM files "
         "WHERE embedding IS NOT NULL AND length(embedding) = ? AND status IN ('done','deleted') "
         "AND category IS NOT NULL", (classifier.DIM * 2,)).fetchall()
     X = np.stack([classifier.unpack(r["embedding"]) for r in rows]) if rows else np.zeros((0, classifier.DIM))
@@ -186,9 +188,9 @@ def sets(rows):
             continue
         if r["kept"]:
             cl_i.append(i); cl_y.append(0); cl_w.append(OWNER_WEIGHT)  # the owner said keeper
-        elif r["clutter"] in (0, 1) and r["clutter_src"] in (None, "model"):
+        elif r["clutter"] in (0, 1) and r["clutter_src"] in (None, "model") and not r["clutter_recheck"]:
             cl_i.append(i); cl_y.append(r["clutter"]); cl_w.append(1)
-        if r["blurry"] in (0, 1) and r["blur_src"] in (None, "model"):
+        if r["blurry"] in (0, 1) and r["blur_src"] in (None, "model") and not r["blur_recheck"]:
             bl_i.append(i); bl_y.append(r["blurry"])
     keep = [j for j, y in enumerate(lab_y) if y >= 0]
     return [
