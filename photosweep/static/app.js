@@ -153,7 +153,9 @@ function renderSummary() {
   const b = s.blurCheck;
   if (b && b.total && b.checked < b.total) line += ` · blur check ${fmt(b.checked)} of ${fmt(b.total)} photos`;
   const c = s.clutterCheck;
-  if (c && c.total && c.checked < c.total) line += ` · clutter check ${fmt(c.checked)} of ${fmt(c.total)}`;
+  // re-asks are already on the line above; this is the first pass
+  const firstPass = c ? c.total - c.checked - ((s.questions && s.questions.rechecks) || 0) : 0;
+  if (c && c.total && firstPass > 0) line += ` · clutter check ${fmt(c.total - firstPass)} of ${fmt(c.total)}`;
   $("progress-line").textContent = line;
   $("progress-bar").style.width = `${pct}%`;
   const pause = $("pause-btn");
