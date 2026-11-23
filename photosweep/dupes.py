@@ -8,6 +8,10 @@ against every other (link), and the pairs within DUP_SIMILAR bits are stored.
 Groups are built from those pairs at read time (groups), over the files still
 on disk, so a delete or a Keep reshapes them with nothing to maintain.
 
+The classifier's embeddings add pairs the hash misses (crops, rotations,
+filters, bursts with movement): neardupes.py. Those join the Similar tier
+only, never Same, and every group is capped at DUP_GROUP_MAX.
+
 Two tiers, from the 2026-11-21 measurement of the whole library:
   same     every member joined by pairs within DUP_SAME bits: copies of one
            picture (original and forward, HEIC and JPEG, `x.jpg` and `x_1.jpg`)
@@ -25,7 +29,7 @@ from collections import defaultdict
 
 from PIL import Image
 
-from . import config, db, imaging
+from . import config, db, imaging, neardupes
 
 log = logging.getLogger("photosweep.dupes")
 TIERS = ("same", "similar")
@@ -185,7 +189,8 @@ def groups(conn):
         f"JOIN files fa ON fa.id = p.a AND fa.{db.LIVE} "
         f"JOIN files fb ON fb.id = p.b AND fb.{db.LIVE} WHERE p.dist <= ?",
         (config.DUP_SIMILAR,)).fetchall()
-    if not pairs:
+    near = neardupes.live_pairs(conn)
+    if not pairs and not near:
         return []
     loose, tight, dist = _Sets(), _Sets(), {}
     for a, b, d in pairs:
@@ -193,14 +198,26 @@ def groups(conn):
         if d <= config.DUP_SAME:
             tight.union(a, b)
         dist[(a, b)] = d
-    members = defaultdict(list)
+    # A look-alike never touches a Same group: attached, it would turn the
+    # copies into Similar and take away Select all extras (the smoke test's
+    # copy pair, 2026-11-23). So pairs with an end in one are left out.
+    roots = defaultdict(set)
     for x in list(loose.parent):
-        members[loose.find(x)].append(x)
-    info = {r["id"]: r for r in conn.execute(
-        f"SELECT {_RANK_COLS} FROM files WHERE {db.LIVE} AND id IN "
-        "(SELECT a FROM dup_pairs UNION SELECT b FROM dup_pairs)")}
+        roots[loose.find(x)].add(tight.find(x))
+    in_same = {x for x in list(loose.parent) if len(roots[loose.find(x)]) == 1}
+    # hash pairs weigh 1.0 and are never cut; embedding pairs weigh their
+    # similarity, so a group over the cap sheds its loosest look-alikes first
+    edges = [(a, b, 1.0) for a, b, _ in pairs] + [
+        (a, b, s) for a, b, s in near if (a, b) not in dist and a not in in_same and b not in in_same]
+    members = neardupes.split(edges, config.DUP_GROUP_MAX)
+    want = sorted({x for m in members for x in m})
+    info = {}
+    for i in range(0, len(want), 900):
+        chunk = want[i:i + 900]
+        info.update({r["id"]: r for r in conn.execute(
+            f"SELECT {_RANK_COLS} FROM files WHERE {db.LIVE} AND id IN ({','.join('?' * len(chunk))})", chunk)})
     out = []
-    for ids in members.values():
+    for ids in members:
         rows = [info[i] for i in ids if i in info]
         if len(rows) < 2 or all(r["kept"] for r in rows):
             continue

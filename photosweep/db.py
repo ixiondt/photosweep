@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS dup_pairs (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS dup_pairs_b ON dup_pairs (b);
 
+-- Pairs whose classifier embeddings are at least DUP_EMBED alike (neardupes.link):
+-- the near-duplicates the hash misses. Read like dup_pairs, Similar tier only.
+CREATE TABLE IF NOT EXISTS embed_pairs (
+    a     INTEGER NOT NULL REFERENCES files (id) ON DELETE CASCADE,
+    b     INTEGER NOT NULL REFERENCES files (id) ON DELETE CASCADE,
+    sim   REAL NOT NULL,
+    PRIMARY KEY (a, b),
+    CHECK (a < b)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS embed_pairs_b ON embed_pairs (b);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -131,6 +142,8 @@ _ADDED = [
     ("label_src", "TEXT"),
     ("clutter_src", "TEXT"),
     ("blur_src", "TEXT"),
+    # 1 = embedding compared against every other one and its pairs stored
+    ("embed_linked", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -153,6 +166,7 @@ def _migrate(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS files_unprinted ON files (id) WHERE status='pending' AND dhash IS NULL")
     # the embedding backfill's queue: rows from before the classifier
     conn.execute("CREATE INDEX IF NOT EXISTS files_unembedded ON files (id) WHERE embedding IS NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS files_embed_unlinked ON files (id) WHERE embed_linked=0")
 
 
 @contextmanager

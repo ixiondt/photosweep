@@ -88,6 +88,11 @@ BLUR_MAX = float(_env("BLUR_MAX", "18"))  # photos scoring under this are listed
 # 50 unrelated photos began chaining into one group.
 DUP_SAME = int(_env("DUP_SAME", "12"))
 DUP_SIMILAR = int(_env("DUP_SIMILAR", "40"))
+# Near-duplicates from the classifier's embeddings (neardupes.py): pairs at
+# least this alike (cosine) join the Similar tier. 0 turns it off.
+DUP_EMBED = float(_env("DUP_EMBED", "0.96"))
+# No group larger than this: a bigger one is re-cut at a higher similarity.
+DUP_GROUP_MAX = int(_env("DUP_GROUP_MAX", "20"))
 MAX_ATTEMPTS = 3         # per file, for failures that are the file's fault
 REWALK_S = int(_env("REWALK_S", str(6 * 3600)))  # pick up photos added while the sweep is live
 

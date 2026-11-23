@@ -39,7 +39,10 @@ in writing.
     selects every other copy across the whole library at once. The server checks
     each file again before deleting it, so a group can never lose its best copy.
   - **Similar** holds burst shots and near-repeats. These are different photos,
-    so there is deliberately no bulk select: you pick the ones to go.
+    so there is deliberately no bulk select: you pick the ones to go. The
+    classifier's embeddings add the look-alikes the hash misses (a crop, a
+    rotation, a filter, a burst frame with movement), into Similar only:
+    [how](#how-the-duplicate-cut-offs-were-chosen).
 - **Deletes safely.** The photo folder is mounted read-only. Deleting goes
   through Nextcloud's WebDAV API with an app password you can revoke, so files
   land in Deleted files and Nextcloud's index stays correct. Every action is
@@ -164,6 +167,7 @@ Edit `.env`:
 | `NC_BASE`, `NC_USER`, `NC_PREFIX` | Your Nextcloud address, the user, and the same folder as Nextcloud names it. Leave `NC_BASE` empty to browse without deleting |
 | `OLLAMA_URL`, `MODEL` | Your Ollama server, or keep the default to use the bundled one. `MODEL=none` to sort with the CPU classifier alone |
 | `CLASSIFIER` | `siglip` (default) or `none`. With `none` and `MODEL=none`, duplicates only |
+| `DUP_EMBED` | How alike two pictures' embeddings must be to show as look-alikes in Similar (default `0.96`; `0` turns it off) |
 | `CLASSIFIER_TRUST` | How sure the classifier must be to settle a question when a vision model is also set (default `0.95`). Lower sends fewer pictures to the model |
 
 Start it, set a password, and open `http://127.0.0.1:8087`:
@@ -204,6 +208,33 @@ unrelated photos started chaining into one large group. So **Same** is 12 or
 less and **Similar** is 40 or less, both adjustable with `DUP_SAME` and
 `DUP_SIMILAR`. One blind spot is known: plain flat images (a black frame, a
 blank wall) all hash alike and land together in Same.
+
+**Look-alikes from the classifier.** The hash compares brightness edges, so a
+crop, a rotation, a filter or a burst frame with movement lands far from its
+twin. The classifier's embeddings do not have that blind spot, so pairs of
+pictures whose embeddings are at least `DUP_EMBED` alike (default 0.96, cosine;
+0 turns it off) are added, **to Similar only**: a look-alike never makes a Same
+group and never joins one, so Same groups and Select all extras are exactly
+what the hash alone gives, and the copy marked best is still chosen by pixels,
+camera and file size. On a 26,551-picture live library
+(counts only, no picture viewed):
+
+| Cut-off | Pairs the hash missed | Taken within an hour | Same folder | Largest group |
+|---|---|---|---|---|
+| 0.98 | 379 | 43% | 99% | 25 |
+| **0.96** | **2,547** | **81%** | **97%** | **55, 20 after the cap** |
+| 0.95 | 5,168 | 81% | 92% | 146 |
+| 0.92 | 24,583 | 54% | 62% | 529 |
+
+Every one of those pairs was two photos; no two screenshots of one app came
+out alike. Of the hash's own Same pairs, 98% are at least 0.96 alike. Below
+0.95 groups chain, as the hash did at 50 bits, so every group is also capped at
+`DUP_GROUP_MAX` (default 20): a bigger one is cut again at a higher similarity
+until it falls apart, except where its pictures are at least 0.99 alike or
+joined by the hash, so a long burst stays whole. With look-alikes added, the
+groups on that library went from 497 to 1,518 and the pictures in them from
+1,386 to 4,041, with no new group over 20. Linking the whole library took 13 s
+on two cores, once; after that only new pictures are compared.
 
 ## The CPU classifier
 

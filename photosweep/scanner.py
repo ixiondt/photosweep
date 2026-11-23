@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 import httpx
 from PIL import Image
 
-from . import classifier, classify, config, db, dupes, imaging, remote
+from . import classifier, neardupes, classify, config, db, dupes, imaging, remote
 
 log = logging.getLogger("photosweep.scanner")
 _stop = False
@@ -490,6 +490,9 @@ def _dupes(conn, backfill=False):
         linked, pairs = dupes.link(conn, lambda: _stop)
         if linked:
             log.info("duplicates linked=%d pairs=%d", linked, pairs)
+        linked, pairs = neardupes.link(conn, lambda: _stop)
+        if linked:
+            log.info("near-duplicates linked=%d pairs=%d", linked, pairs)
     except Exception as exc:
         log.error("duplicate linking failed err=%s", f"{type(exc).__name__}: {exc}")
 
@@ -577,6 +580,9 @@ def run(limit=None, sample=False, match=None):
                     if embedded % 2000 < n:
                         log.info("classifier backfill embedded=%d", embedded)
                     continue
+                if embedded:
+                    _dupes(conn)  # the backfilled embeddings, linked as near-duplicates
+                    embedded = 0
             if not config.LABELLING:
                 # MODEL=none: the classifier sorted what it could while
                 # fingerprinting; nothing is left to ask. Idle until the re-walk.
