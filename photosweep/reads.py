@@ -171,13 +171,14 @@ def items(request: Request, tab: str = "screenshot", min_conf: int = 0, offset: 
 
 
 @router.get("/api/dupes")
-def dupe_groups(request: Request, tier: str = "same", offset: int = 0, limit: int = 40):
+def dupe_groups(request: Request, tier: str = "same", offset: int = 0, limit: int = 40, mirrored: int = 0):
     """Duplicate groups of one tier, best copy first in each (dupes.groups).
     Paged by group, not by file, so a group never splits across pages."""
     operator(request)
     if tier not in dupes.TIERS:
         raise HTTPException(status_code=400, detail="unknown tier")
-    return dupes.page(conn(), tier, max(0, int(offset)), max(1, min(int(limit), GROUP_PAGE_MAX)), ITEM_COLS)
+    return dupes.page(conn(), tier, max(0, int(offset)), max(1, min(int(limit), GROUP_PAGE_MAX)), ITEM_COLS,
+                      only_mirrored=bool(mirrored))
 
 
 @router.get("/api/dupes/extras")

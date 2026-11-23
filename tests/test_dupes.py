@@ -157,7 +157,7 @@ def test_groups_tier_rank_and_count_only_live_unsettled_files(conn):
     assert bursts["tier"] == "similar" and bursts["ids"][0] == burst[2]  # the largest file
     assert got[tuple(sorted([small_kept, big]))]["ids"][0] == small_kept
     # deletable: Same extras minus the kept one is 2 (copies) + 1 (big, under a kept best) = 3
-    assert dupes.counts(dupes.groups(conn)) == {"same": 2, "similar": 1, "extras": 5,
+    assert dupes.counts(dupes.groups(conn)) == {"same": 2, "similar": 1, "mirrored": 0, "extras": 5,
                                                 "deletable": {"same": 3, "similar": 2}}
     assert set(dupes.extras(dupes.groups(conn), "same")) == {wa, re1, big}
     assert orig not in dupes.extras(dupes.groups(conn), "same")  # a best copy is never an extra
@@ -326,3 +326,80 @@ def test_summary_with_no_model_says_so_and_counts_fingerprints(client, monkeypat
     assert body["modelRemote"]["remote"] is False  # no model, so nothing leaves
     p = body["progress"]
     assert (p["total"], p["fingerprinted"]) == (6, 5)  # four labelled + p.jpg; q.jpg still to do
+
+
+# ------------------------------------------------------------- mirrors ----
+
+def _flat_scene(seed):
+    """Big flat areas, where neighbouring pixels tie: the case a hash worked
+    out from the plain one got wrong (66 bits on 2026-11-23)."""
+    img = _scene(seed)
+    ImageDraw.Draw(img).rectangle((0, 0, 400, 900), fill=(255, 255, 255))
+    return img
+
+
+def _hashes(img):
+    data = imaging.jpeg_bytes(img, 512)
+    with Image.open(io.BytesIO(data)) as stored:
+        return imaging.dhash(stored), imaging.dhash_flipped(stored)
+
+
+def test_a_mirrored_copy_is_found_by_its_flipped_hash():
+    for base in (_scene(7), _flat_scene(7)):
+        h, f = _hashes(base)
+        other, _ = _hashes(_reencoded(base.transpose(Image.Transpose.FLIP_LEFT_RIGHT).resize((600, 450)),
+                                      "JPEG", quality=50))
+        assert dupes.distance(h, other) > config.DUP_SIMILAR  # the plain hash never pairs them
+        assert dupes.mirrored(h, f, other) and dupes.distance(f, other) <= config.DUP_SAME
+        assert not dupes.mirrored(h, f, _hashes(_scene(8))[0])
+    assert not dupes.mirrored(h, None, other) and not dupes.mirrored(h, "", other)
+
+
+def test_backfill_flips_from_thumbnails_once(conn, tmp_path):
+    good = add(conn, "a.jpg", _hash(1))
+    lost = add(conn, "b.jpg", _hash(2))
+    add(conn, "c.jpg", None)
+    _scene(1).save(tmp_path / f"{good}.jpg", "JPEG")
+
+    def thumb(i):
+        return str(tmp_path / f"{i}.jpg")
+    assert dupes.backfill_flips(conn, thumb, never) == 2
+    got = dict(conn.execute("SELECT id, dhash_flip FROM files"))
+    assert len(got[good]) == 64 and got[lost] == "" and got[3] is None
+    assert dupes.backfill_flips(conn, thumb, never) == 0  # nothing left, the lost one not retried
+
+
+def add_flip(conn, rel, dhash, flip, **kw):
+    i = add(conn, rel, dhash, **kw)
+    conn.execute("UPDATE files SET dhash_flip=? WHERE id=?", (flip, i))
+    return i
+
+
+def test_similar_marks_mirrored_copies_and_can_show_only_them(conn, monkeypatch):
+    monkeypatch.setattr(config, "DUP_EMBED", 0.96)
+    best = add_flip(conn, "selfie.jpeg", _hash(5), _hash(6), w=2160, h=3840, size=2_400_000, camera="phone")
+    flip = add_flip(conn, "selfie-forward.jpg", _hash(6, 9), _hash(5, 9), w=2160, h=3840, size=500_000)
+    other = add_flip(conn, "burst-a.jpg", _hash(9), _hash(11), camera="phone")
+    other2 = add_flip(conn, "burst-b.jpg", _hash(10), _hash(12), camera="phone")
+    conn.executemany("INSERT INTO embed_pairs (a, b, sim) VALUES (?, ?, ?)",
+                     [(best, flip, 0.976), (other, other2, 0.97)])
+    gs = {g["ids"][0]: g for g in dupes.groups(conn)}
+    assert gs[best]["tier"] == "similar" and gs[best]["mirror"] == [False, True] and gs[best]["mirrored"]
+    assert not gs[other]["mirrored"]
+    assert dupes.counts(list(gs.values()))["mirrored"] == 1
+    cols = "id, rel"
+    assert dupes.page(conn, "similar", 0, 10, cols)["total"] == 2
+    only = dupes.page(conn, "similar", 0, 10, cols, only_mirrored=True)
+    assert only["total"] == 1 and [i["mirror"] for i in only["groups"][0]["items"]] == [False, True]
+
+
+def test_a_mirrored_pair_is_found_below_the_best_copy_too(conn, monkeypatch):
+    """In a group whose best copy is a third picture, the flipped one of the
+    pair is still marked (the synthetic page check, 2026-11-23)."""
+    monkeypatch.setattr(config, "DUP_EMBED", 0.96)
+    top = add_flip(conn, "big.jpg", _hash(20), _hash(30), w=4000, h=3000, camera="phone")
+    a = add_flip(conn, "selfie.jpg", _hash(21), _hash(22), size=900_000, camera="phone")
+    b = add_flip(conn, "selfie-forward.jpg", _hash(22, 4), _hash(21, 4), size=200_000)
+    conn.executemany("INSERT INTO embed_pairs (a, b, sim) VALUES (?, ?, ?)", [(top, a, 0.97), (a, b, 0.98)])
+    (g,) = dupes.groups(conn)
+    assert g["ids"] == [top, a, b] and g["mirror"] == [False, False, True] and g["mirrored"]

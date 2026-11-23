@@ -88,6 +88,10 @@ BLUR_MAX = float(_env("BLUR_MAX", "18"))  # photos scoring under this are listed
 # 50 unrelated photos began chaining into one group.
 DUP_SAME = int(_env("DUP_SAME", "12"))
 DUP_SIMILAR = int(_env("DUP_SIMILAR", "40"))
+# A Similar member is a mirrored copy of its group's best copy when its hash is
+# within this many bits of the best copy's flipped hash (imaging.dhash_flipped)
+# and closer that way than as it is.
+DUP_MIRROR = int(_env("DUP_MIRROR", "24"))
 # Near-duplicates from the classifier's embeddings (neardupes.py): pairs at
 # least this alike (cosine) join the Similar tier. 0 turns it off.
 DUP_EMBED = float(_env("DUP_EMBED", "0.96"))

@@ -545,6 +545,9 @@ def _dupes(conn, backfill=False):
         linked, pairs = dupes.link(conn, lambda: _stop)
         if linked:
             log.info("duplicates linked=%d pairs=%d", linked, pairs)
+        flipped = dupes.backfill_flips(conn, thumb_path, lambda: _stop)
+        if flipped:
+            log.info("flipped hashes stored=%d", flipped)
         linked, pairs = neardupes.link(conn, lambda: _stop)
         if linked:
             log.info("near-duplicates linked=%d pairs=%d", linked, pairs)

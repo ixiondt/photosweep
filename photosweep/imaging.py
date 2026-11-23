@@ -143,6 +143,20 @@ def dhash(img, n=16):
     return f"{bits:0{n * n // 4}x}"
 
 
+def dhash_flipped(img):
+    """dhash() of the picture flipped left to right, so a mirrored copy (a
+    selfie and its flipped forward) lands as close to it as a plain copy
+    would. Taken from the pixels rather than worked out from dhash(): that
+    shortcut breaks wherever neighbours are exactly equal (a blown sky, a
+    white wall, a black screen), measured 2026-11-23 at 66 bits on a
+    synthetic pair where the real flip is a few.
+
+    On the library a WhatsApp selfie and its flipped copy sit 126 bits apart
+    as they are and 14 apart with one flipped; about 440 look-alike pairs fall
+    within 24 that way, and no random pair of 200,000 did within 20."""
+    return dhash(img.transpose(Image.Transpose.FLIP_LEFT_RIGHT))
+
+
 def jpeg_bytes(img, max_px, quality=82):
     """A copy scaled to fit max_px on its long side, as JPEG bytes."""
     copy = img.copy()

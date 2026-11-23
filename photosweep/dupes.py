@@ -10,7 +10,10 @@ on disk, so a delete or a Keep reshapes them with nothing to maintain.
 
 The classifier's embeddings add pairs the hash misses (crops, rotations,
 filters, bursts with movement): neardupes.py. Those join the Similar tier
-only, never Same, and every group is capped at DUP_GROUP_MAX.
+only, never Same, and every group is capped at DUP_GROUP_MAX. Among them are
+mirrored copies (a selfie and its flipped forward), which the hash alone can
+never pair; each is marked against the members ranked above it (mirrored())
+so Similar can show them on their own.
 
 Two tiers, from the 2026-11-21 measurement of the whole library:
   same     every member joined by pairs within DUP_SAME bits: copies of one
@@ -44,6 +47,15 @@ _RANK_COLS = "id, rel, size, width, height, camera, kept, blurry, sharpness, mti
 
 def distance(a, b):
     return (int(a, 16) ^ int(b, 16)).bit_count()
+
+
+def mirrored(a_hash, a_flip, b_hash):
+    """Whether b is picture a flipped left to right: b's hash near a's
+    flipped hash (imaging.dhash_flipped), and nearer than to a as it is."""
+    if not a_hash or not a_flip or not b_hash:
+        return False
+    d = distance(a_flip, b_hash)
+    return d <= config.DUP_MIRROR and d < distance(a_hash, b_hash)
 
 
 def keeper_key(r):
@@ -93,6 +105,39 @@ def backfill_hashes(conn, thumb_path, should_stop, batch=200):
     if pending:
         flush()
     return hashed
+
+
+def backfill_flips(conn, thumb_path, should_stop, batch=200):
+    """Store the flipped hash (imaging.dhash_flipped) of every hashed row that
+    has none, from its stored thumbnail, so Similar can tell a mirrored copy.
+    A thumbnail that cannot be read gets '' and is not tried again. Cheap when
+    there is nothing to do (an index on the unflipped rows), so the scanner
+    calls it on every idle pass. Returns the number done."""
+    todo = [r["id"] for r in conn.execute(
+        "SELECT id FROM files WHERE dhash IS NOT NULL AND dhash_flip IS NULL ORDER BY id")]
+    done, pending = 0, []
+
+    def flush():
+        with db.immediate(conn):
+            conn.executemany("UPDATE files SET dhash_flip=? WHERE id=? AND dhash_flip IS NULL", pending)
+        pending.clear()
+
+    for file_id in todo:
+        if should_stop():
+            break
+        try:
+            with Image.open(thumb_path(file_id)) as im:
+                h = imaging.dhash_flipped(im)
+        except (OSError, ValueError) as exc:
+            log.warning("flipped hash skipped id=%d err=%s", file_id, type(exc).__name__)
+            h = ""
+        pending.append((h, file_id))
+        done += 1
+        if len(pending) >= batch:
+            flush()
+    if pending:
+        flush()
+    return done
 
 
 def _reset_if_cutoff_changed(conn):
@@ -215,7 +260,8 @@ def groups(conn):
     for i in range(0, len(want), 900):
         chunk = want[i:i + 900]
         info.update({r["id"]: r for r in conn.execute(
-            f"SELECT {_RANK_COLS} FROM files WHERE {db.LIVE} AND id IN ({','.join('?' * len(chunk))})", chunk)})
+            f"SELECT {_RANK_COLS}, dhash, dhash_flip FROM files WHERE {db.LIVE} AND id IN ({','.join('?' * len(chunk))})",
+            chunk)})
     out = []
     for ids in members:
         rows = [info[i] for i in ids if i in info]
@@ -223,8 +269,16 @@ def groups(conn):
             continue
         rows.sort(key=keeper_key)
         keep = rows[0]["id"]
+        tier = "same" if len({tight.find(r["id"]) for r in rows}) == 1 else "similar"
+        # a member is marked when it is a flipped copy of one ranked above it,
+        # so of a mirrored pair the better copy stays unmarked
+        mirror = [k > 0 and tier == "similar" and any(
+            mirrored(rows[j]["dhash"], rows[j]["dhash_flip"], rows[k]["dhash"]) for j in range(k))
+            for k in range(len(rows))]
         out.append({
-            "tier": "same" if len({tight.find(r["id"]) for r in rows}) == 1 else "similar",
+            "tier": tier,
+            "mirror": mirror,
+            "mirrored": any(mirror),
             "ids": [r["id"] for r in rows],
             "kept": [bool(r["kept"]) for r in rows],
             "dist": [None] + [dist.get((min(keep, r["id"]), max(keep, r["id"]))) for r in rows[1:]],
@@ -240,8 +294,10 @@ def counts(all_groups):
     """Groups per tier, the files beyond the keeper in all of them, and per
     tier how many extras a bulk delete could take (extras() of that tier)."""
     c = {t: 0 for t in TIERS}
+    c["mirrored"] = 0
     for g in all_groups:
         c[g["tier"]] += 1
+        c["mirrored"] += g.get("mirrored", False)
     return {**c, "extras": sum(len(g["ids"]) - 1 for g in all_groups),
             "deletable": {t: len(extras(all_groups, t)) for t in TIERS}}
 
@@ -253,11 +309,12 @@ def extras(all_groups, tier):
             for i, kept in zip(g["ids"][1:], g["kept"][1:]) if not kept]
 
 
-def page(conn, tier, offset, limit, cols):
+def page(conn, tier, offset, limit, cols, only_mirrored=False):
     """One page of a tier's groups, each member as the full item row the grid
-    shows (`cols`), plus `keeper` and `dist`."""
+    shows (`cols`), plus `keeper`, `dist` and `mirror`. With only_mirrored,
+    just the groups holding a mirrored copy."""
     all_groups = groups(conn)
-    chosen = [g for g in all_groups if g["tier"] == tier]
+    chosen = [g for g in all_groups if g["tier"] == tier and (g["mirrored"] or not only_mirrored)]
     window = chosen[offset:offset + limit]
     want = [i for g in window for i in g["ids"]]
     rows = {}
@@ -267,8 +324,8 @@ def page(conn, tier, offset, limit, cols):
     out = []
     for g in window:
         items = []
-        for k, (i, d) in enumerate(zip(g["ids"], g["dist"])):
+        for k, (i, d, m) in enumerate(zip(g["ids"], g["dist"], g["mirror"])):
             if i in rows:
-                items.append({**rows[i], "keeper": k == 0, "dist": d})
+                items.append({**rows[i], "keeper": k == 0, "dist": d, "mirror": m})
         out.append({"tier": g["tier"], "items": items})
     return {"groups": out, "total": len(chosen), "offset": offset, "counts": counts(all_groups)}
