@@ -252,7 +252,7 @@ async function selectAllExtras() {
     const mirror = state.tier === "similar" && state.mirrored;
     const data = await api(mirror ? "/api/dupes/extras?tier=similar&mirrored=1" : "/api/dupes/extras?tier=same");
     state.selected = new Set(data.ids);
-    state.bulk = true;
+    state.bulk = mirror ? "mirrored" : "same";
     state.anchor = null;
     for (const item of state.items) markTile(item.id, state.selected.has(item.id));
     updateSelection();
@@ -661,7 +661,9 @@ async function doDelete() {
   let failed = 0, skipped = 0;
   try {
     for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
-      const res = await api(bulk ? "/api/dupes/delete-extras" : "/api/delete", { ids: ids.slice(i, i + DELETE_CHUNK) });
+      const chunk = ids.slice(i, i + DELETE_CHUNK);
+      const res = await api(bulk ? "/api/dupes/delete-extras" : "/api/delete",
+        bulk ? { ids: chunk, kind: bulk } : { ids: chunk });
       const failedIds = new Set([...res.failedIds, ...(res.skippedIds || [])]);
       failed += res.failed;
       skipped += res.skipped || 0;
@@ -683,7 +685,9 @@ async function doDelete() {
   }
   if (done.length || failed || skipped) {
     let msg = `Moved ${fmt(done.length)} to Deleted files.`;
-    if (skipped) msg += ` ${fmt(skipped)} skipped: no longer an extra (now a best copy, kept, or not in a Same group).`;
+    if (skipped) msg += bulk === "mirrored"
+      ? ` ${fmt(skipped)} skipped: no longer a mirrored copy (now a best copy, kept, or its pair is gone).`
+      : ` ${fmt(skipped)} skipped: no longer an extra (now a best copy, kept, or not in a Same group).`;
     if (failed) msg += ` ${fmt(failed)} could not be deleted${bulk ? "" : " and are still selected"}.`;
     toast(msg);
   }
