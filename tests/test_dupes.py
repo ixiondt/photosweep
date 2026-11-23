@@ -158,7 +158,7 @@ def test_groups_tier_rank_and_count_only_live_unsettled_files(conn):
     assert got[tuple(sorted([small_kept, big]))]["ids"][0] == small_kept
     # deletable: Same extras minus the kept one is 2 (copies) + 1 (big, under a kept best) = 3
     assert dupes.counts(dupes.groups(conn)) == {"same": 2, "similar": 1, "mirrored": 0, "extras": 5,
-                                                "deletable": {"same": 3, "similar": 2}}
+                                                "deletable": {"same": 3, "similar": 2, "mirrored": 0}}
     assert set(dupes.extras(dupes.groups(conn), "same")) == {wa, re1, big}
     assert orig not in dupes.extras(dupes.groups(conn), "same")  # a best copy is never an extra
 
@@ -228,7 +228,7 @@ def test_dupes_pages_by_group_with_the_keeper_first(client):
     assert client.get("/api/dupes?tier=same&offset=1", headers=h).json()["groups"] == []
     summary = client.get("/api/summary", headers=h).json()
     assert summary["counts"]["dupes"] == 2 and summary["dupGroups"] == {"same": 1, "similar": 1}
-    assert summary["dupExtras"] == {"same": 1, "similar": 1}
+    assert summary["dupExtras"] == {"same": 1, "similar": 1, "mirrored": 0}
 
 
 WRITE = {"Origin": "http://testserver", "X-Photosweep": "1", "Content-Type": "application/json"}
@@ -237,6 +237,7 @@ WRITE = {"Origin": "http://testserver", "X-Photosweep": "1", "Content-Type": "ap
 def test_select_all_extras_is_same_only(client):
     h = {"Tailscale-User-Login": OP}
     assert client.get("/api/dupes/extras?tier=similar", headers=h).status_code == 400
+    assert client.get("/api/dupes/extras?tier=similar&mirrored=1", headers=h).json() == {"ids": [], "count": 0}
     body = client.get("/api/dupes/extras?tier=same", headers=h).json()
     from photosweep import config, db
     c = db.connect(config.DB_PATH)
@@ -391,6 +392,11 @@ def test_similar_marks_mirrored_copies_and_can_show_only_them(conn, monkeypatch)
     assert dupes.page(conn, "similar", 0, 10, cols)["total"] == 2
     only = dupes.page(conn, "similar", 0, 10, cols, only_mirrored=True)
     assert only["total"] == 1 and [i["mirror"] for i in only["groups"][0]["items"]] == [False, True]
+    assert dupes.mirrored_extras(list(gs.values())) == [flip]
+    conn.execute("UPDATE files SET kept=1 WHERE id=?", (flip,))
+    # a Keep is never selected, and wins: the kept flip ranks first, so the
+    # other copy becomes the mirrored one, as a Keep decides a Same group too
+    assert dupes.mirrored_extras(dupes.groups(conn)) == [best]
 
 
 def test_a_mirrored_pair_is_found_below_the_best_copy_too(conn, monkeypatch):
@@ -403,3 +409,43 @@ def test_a_mirrored_pair_is_found_below_the_best_copy_too(conn, monkeypatch):
     conn.executemany("INSERT INTO embed_pairs (a, b, sim) VALUES (?, ?, ?)", [(top, a, 0.97), (a, b, 0.98)])
     (g,) = dupes.groups(conn)
     assert g["ids"] == [top, a, b] and g["mirror"] == [False, False, True] and g["mirrored"]
+    assert dupes.mirrored_extras([g]) == [b]  # not `a`, a different photo of the group
+
+
+def test_bulk_delete_of_mirrored_copies_takes_only_mirrored_copies(client, monkeypatch):
+    """Select all mirrored copies sends kind=mirrored: the server deletes the
+    copies captioned mirrored, and skips a best copy, a burst frame of the
+    same group and anything that is only a Same extra (2026-11-23: before
+    kind existed, all 385 asked were skipped as not Same extras)."""
+    import contextlib
+    import json
+    from photosweep import config, db, nextcloud
+    monkeypatch.setattr(config, "DUP_EMBED", 0.96)
+    c = db.connect(config.DB_PATH)
+    ids = {r["rel"]: r["id"] for r in c.execute("SELECT id, rel FROM files")}
+
+    def put(rel, h, flip, size):
+        i = c.execute("INSERT INTO files (rel, size, mtime, status, category, confidence, kept, width, height, "
+                      "dhash, dhash_flip) VALUES (?,?,'2020-01-01','done','photo',90,0,1000,750,?,?)",
+                      (rel, size, h, flip)).lastrowid
+        return i
+    best = put("selfie.jpeg", _hash(40), _hash(41), 900_000)
+    flip = put("selfie-fwd.jpg", _hash(41, 3), _hash(40, 3), 200_000)
+    frame = put("selfie-burst.jpg", _hash(42), _hash(43), 100_000)
+    c.executemany("INSERT INTO embed_pairs (a, b, sim) VALUES (?, ?, ?)", [(best, flip, 0.97), (best, frame, 0.97)])
+    with open(config.NC_SECRET_FILE, "w") as f:
+        f.write("app-password")
+    sent = []
+    monkeypatch.setattr(nextcloud, "client", lambda *_a: contextlib.nullcontext(None))
+    monkeypatch.setattr(nextcloud, "delete", lambda _c, _b, _u, _p, rel: sent.append(rel) or "deleted")
+    h = {"Tailscale-User-Login": OP, **WRITE}
+    asked = [best, flip, frame, ids["a-copy.jpg"]]
+    r = client.post("/api/dupes/delete-extras", headers=h, content=json.dumps({"ids": asked, "kind": "mirrored"})).json()
+    assert sent == ["selfie-fwd.jpg"] and r["deleted"] == 1
+    assert set(r["skippedIds"]) == {best, frame, ids["a-copy.jpg"]}
+    # without kind it is Same's rule, as before: none of the three is a Same extra
+    r = client.post("/api/dupes/delete-extras", headers=h, content=json.dumps({"ids": [best, frame]})).json()
+    assert r["deleted"] == 0 and r["skipped"] == 2
+    assert client.post("/api/dupes/delete-extras", headers=h,
+                       content=json.dumps({"ids": [best], "kind": "similar"})).status_code == 400
+    assert db.verify_audit(c) == (True, None)

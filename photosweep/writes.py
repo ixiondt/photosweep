@@ -115,18 +115,25 @@ async def delete_extras(request: Request):
     extra of a Same group (a best copy, something kept, a Similar frame, a file
     the page saw earlier but that has since become a group's best copy) is
     skipped and reported, never deleted. A Same group therefore cannot lose its
-    last copy through this route, whatever the page sends."""
+    last copy through this route, whatever the page sends. With kind
+    "mirrored" (Select all mirrored copies) the allowed set is instead the
+    copies captioned mirrored in Similar (dupes.mirrored_extras), rebuilt the
+    same way."""
     who, body = await mutation(request)
     ids = ids_from(body, DELETE_MAX)
     password = config.read_secret(config.NC_SECRET_FILE)
     if not password or not config.nextcloud_configured():
         return api_error(409, "NEXTCLOUD_NOT_CONFIGURED", "Save a Nextcloud app password first.")
-    allowed = set(dupes.extras(dupes.groups(conn()), "same"))
+    kind = body.get("kind", "same") if isinstance(body, dict) else "same"
+    if kind not in ("same", "mirrored"):
+        return api_error(400, "BAD_REQUEST", "kind must be same or mirrored.")
+    groups = dupes.groups(conn())
+    allowed = set(dupes.mirrored_extras(groups) if kind == "mirrored" else dupes.extras(groups, "same"))
     todo = [i for i in ids if i in allowed]
     skipped = [i for i in ids if i not in allowed]
     c = conn()
     with db.immediate(c):
-        db.audit(c, who, "delete-extras", {"asked": len(ids), "skipped": skipped})
+        db.audit(c, who, "delete-extras", {"kind": kind, "asked": len(ids), "skipped": skipped})
     res = (await run_in_threadpool(_delete_batch, who, todo, password)) if todo else         {"deleted": 0, "gone": 0, "failed": 0, "failedIds": []}
     return {**res, "skipped": len(skipped), "skippedIds": skipped}
 

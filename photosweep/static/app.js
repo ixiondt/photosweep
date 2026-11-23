@@ -9,7 +9,7 @@ const TABS = [
   { key: "clutter", label: "Clutter", note: "Photos the model, asked separately about each one, says nobody would miss: floors and walls, dark or accidental frames, random objects, scraps of paper, empty car parks. Surest first. People and pets should not be here, so look before deleting, and Keep anything it got wrong." },
   { key: "photo", label: "Photos", note: "What the model thinks is a real photo, least certain first: those are the ones it may have got wrong. Blurry ones are under Blurry and clutter under Clutter instead." },
   { key: "blurry", label: "Blurry", note: "Shaken, out-of-focus or smeared photos. The model is asked about each photo separately; its surest calls come first. Photos it has not looked at yet are judged by a pixel score until it does, and that score mistakes smooth skin, sky and plain walls for blur. Look before deleting." },
-  { key: "dupes", label: "Duplicates", note: "The same picture in more than one file: a WhatsApp copy next to its original, a HEIC next to its JPEG, an IMG_0205_1 re-import. Found by what the picture shows, not by name or bytes. Each group puts its best copy first (most pixels, then a camera in the EXIF, then the larger file), and Select all extras picks every other copy in every Same group, loaded or not. Similar is burst shots and near-repeats: different photos, so there is no bulk select there; pick the ones to go by hand." },
+  { key: "dupes", label: "Duplicates", note: "The same picture in more than one file: a WhatsApp copy next to its original, a HEIC next to its JPEG, an IMG_0205_1 re-import. Found by what the picture shows, not by name or bytes. Each group puts its best copy first (most pixels, then a camera in the EXIF, then the larger file), and Select all extras picks every other copy in every Same group, loaded or not. Similar is burst shots and near-repeats: different photos, so there is no bulk select there; pick the ones to go by hand. The one exception is Mirrored only, where Select all mirrored copies picks just the flipped copies." },
   { key: "kept", label: "Kept", note: "Images you marked to keep. They never come back into the other tabs." },
   { key: "error", label: "Errors", note: "Files the scan could not read or label after three tries. Recheck tries again; an empty (0-byte) or garbage file will only fail again, so Delete those." },
 ];
@@ -235,23 +235,30 @@ function syncDupControls() {
   const dupes = state.tab === "dupes";
   const n = state.summary && state.summary.dupExtras ? state.summary.dupExtras.same : null;
   $("select-shown").hidden = dupes;
-  $("select-all-extras").hidden = !(dupes && state.tier === "same");
+  const mirrorMode = dupes && state.tier === "similar" && state.mirrored;
+  const m = state.summary && state.summary.dupExtras ? state.summary.dupExtras.mirrored : null;
+  $("select-all-extras").hidden = !(dupes && (state.tier === "same" || mirrorMode));
+  $("select-all-extras").textContent = mirrorMode
+    ? (m != null ? `Select all ${fmt(m)} mirrored ${m === 1 ? "copy" : "copies"}` : "Select all mirrored copies")
+    : (n != null ? `Select all ${fmt(n)} extras` : "Select all extras");
   $("mirror-only").hidden = !(dupes && state.tier === "similar");
   $("mirror-only").setAttribute("aria-pressed", String(state.mirrored));
-  $("select-all-extras").textContent = n != null ? `Select all ${fmt(n)} extras` : "Select all extras";
 }
 
 async function selectAllExtras() {
   const btn = $("select-all-extras");
   btn.disabled = true;
   try {
-    const data = await api("/api/dupes/extras?tier=same");
+    const mirror = state.tier === "similar" && state.mirrored;
+    const data = await api(mirror ? "/api/dupes/extras?tier=similar&mirrored=1" : "/api/dupes/extras?tier=same");
     state.selected = new Set(data.ids);
-    state.bulk = true;
+    state.bulk = mirror ? "mirrored" : "same";
     state.anchor = null;
     for (const item of state.items) markTile(item.id, state.selected.has(item.id));
     updateSelection();
-    toast(`Selected ${fmt(data.count)} extras across every Same group. Each group keeps its best copy.`);
+    toast(mirror
+      ? `Selected ${fmt(data.count)} mirrored copies. Each group keeps its best copy, and burst frames are left alone.`
+      : `Selected ${fmt(data.count)} extras across every Same group. Each group keeps its best copy.`);
   } catch (err) {
     toast(err.message);
   } finally {
@@ -654,7 +661,9 @@ async function doDelete() {
   let failed = 0, skipped = 0;
   try {
     for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
-      const res = await api(bulk ? "/api/dupes/delete-extras" : "/api/delete", { ids: ids.slice(i, i + DELETE_CHUNK) });
+      const chunk = ids.slice(i, i + DELETE_CHUNK);
+      const res = await api(bulk ? "/api/dupes/delete-extras" : "/api/delete",
+        bulk ? { ids: chunk, kind: bulk } : { ids: chunk });
       const failedIds = new Set([...res.failedIds, ...(res.skippedIds || [])]);
       failed += res.failed;
       skipped += res.skipped || 0;
@@ -676,7 +685,9 @@ async function doDelete() {
   }
   if (done.length || failed || skipped) {
     let msg = `Moved ${fmt(done.length)} to Deleted files.`;
-    if (skipped) msg += ` ${fmt(skipped)} skipped: no longer an extra (now a best copy, kept, or not in a Same group).`;
+    if (skipped) msg += bulk === "mirrored"
+      ? ` ${fmt(skipped)} skipped: no longer a mirrored copy (now a best copy, kept, or its pair is gone).`
+      : ` ${fmt(skipped)} skipped: no longer an extra (now a best copy, kept, or not in a Same group).`;
     if (failed) msg += ` ${fmt(failed)} could not be deleted${bulk ? "" : " and are still selected"}.`;
     toast(msg);
   }
