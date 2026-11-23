@@ -105,6 +105,27 @@ class Heads:
         p = float(sigmoid(a * hidden(emb, *weights) + c))
         return classes, np.array([1.0 - p, p], np.float32)
 
+    def batch(self, X):
+        """verdicts() for many embeddings at once (rows of X): a dict of
+        arrays, label as class names, the probabilities NaN where the heads
+        file carries no such head. Seconds for a whole library."""
+        X = np.asarray(X, np.float32)
+        kind, weights, cal, classes = self.q["label"]
+        W, b = weights
+        P = softmax((X @ W) * cal + b)
+        i = P.argmax(1)
+        out = {"label": np.array(classes)[i], "label_p": P[np.arange(len(X)), i]}
+        for name, yes in (("clutter", "clutter"), ("blur", "blurry")):
+            p = np.full(len(X), np.nan, np.float32)
+            if name in self.q:
+                kind, weights, cal, classes = self.q[name]
+                if kind == "net":
+                    p = sigmoid(cal[0] * hidden(X, *weights) + cal[1])
+                else:
+                    p = softmax((X @ weights[0]) * cal + weights[1])[:, classes.index(yes)]
+            out[f"{name}_p"] = p
+        return out
+
     def verdicts(self, emb):
         """{label, label_p, clutter_p, blur_p}: the likeliest label and its
         probability, and the probability of clutter and of blur (None when

@@ -26,9 +26,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import httpx
+import numpy as np
 from PIL import Image
 
-from . import classifier, neardupes, classify, config, db, dupes, imaging, remote
+from . import classifier, classify, config, db, dupes, imaging, neardupes, remote
 
 log = logging.getLogger("photosweep.scanner")
 _stop = False
@@ -245,6 +246,49 @@ def record_fingerprint(conn, row, prepared):
     return "sorted" if sets.get("status") == "done" else "printed"
 
 
+def heads_signature():
+    """What identifies the loaded heads: their file's path, size and time."""
+    clf = classifier.load()
+    if clf is None or clf.heads is None:
+        return None
+    st = os.stat(clf.heads_file)
+    return f"{clf.heads_file}:{st.st_size}:{int(st.st_mtime)}"
+
+
+def rescore(conn, chunk=4000):
+    """Recompute the classifier's answers (cpu_label, cpu_*_p) for every stored
+    embedding when the heads have changed since the last pass, so the scores
+    the queue sorts by come from the heads in use. Only the cpu_* columns: an
+    answer already settled is never touched. Returns rows rescored."""
+    sig = heads_signature()
+    if sig is None or db.get_setting(conn, "heads_scored") == sig:
+        return 0
+    clf = classifier.load()
+    size = classifier.DIM * 2
+    done, last = 0, 0
+    while not _stop:
+        rows = conn.execute("SELECT id, embedding FROM files WHERE id > ? AND length(embedding) = ? "
+                            "ORDER BY id LIMIT ?", (last, size, chunk)).fetchall()
+        if not rows:
+            break
+        v = clf.heads.batch(np.stack([classifier.unpack(r["embedding"]) for r in rows]))
+
+        def p(name, k):
+            x = float(v[name][k])
+            return None if np.isnan(x) else round(x, 4)
+        with db.immediate(conn):
+            conn.executemany(
+                "UPDATE files SET cpu_label=?, cpu_label_p=?, cpu_clutter_p=?, cpu_blur_p=? WHERE id=?",
+                [(str(v["label"][k]), p("label_p", k), p("clutter_p", k), p("blur_p", k), r["id"])
+                 for k, r in enumerate(rows)])
+        done += len(rows)
+        last = rows[-1]["id"]
+    if not _stop:
+        db.set_setting(conn, "heads_scored", sig)
+        log.info("classifier rescored=%d heads=%s", done, sig)
+    return done
+
+
 def embed_backfill_batch(conn, pool, batch=32):
     """Embed rows from before the classifier, from their stored thumbnails:
     labelled and deleted rows for their embedding and the heads' answers (the
@@ -391,13 +435,20 @@ def judge_one(conn, http, token, row):
 
 
 def next_clutter(conn):
-    """The next photo to ask the clutter question of. Photos with no camera in
-    their EXIF first (chat forwards, saves, downloads: where the clutter is
-    thickest, about 8,500 of 33,000 on 2026-11-19), and photos already in
-    Blurry last, since those are in front of the owner already."""
+    """The next photo to ask the clutter question of. Rechecks first, and
+    among them the likeliest to change answer: a photo in Clutter the
+    classifier thinks a keeper, or a keeper it thinks clutter, so after a
+    reworded question the tab corrects itself in the first hours rather than
+    over the whole queue (3,362 re-asks on 2026-11-23). Then the first pass:
+    photos with no camera in their EXIF first (chat forwards, saves,
+    downloads: where the clutter is thickest, about 8,500 of 33,000 on
+    2026-11-19), and photos already in Blurry last, since those are in front
+    of the owner already."""
     return conn.execute(
         "SELECT id, rel, clutter_recheck FROM files WHERE status='done' AND kept=0 AND category='photo' "
         "AND (clutter IS NULL OR clutter_recheck = 1) ORDER BY clutter_recheck DESC, "
+        "CASE WHEN clutter_recheck = 1 AND clutter IN (0, 1) AND cpu_clutter_p IS NOT NULL "
+        "THEN abs(clutter - cpu_clutter_p) ELSE 0 END DESC, "
         "(camera IS NULL) DESC, (coalesce(blurry, -1) = 1), id LIMIT 1").fetchone()
 
 
@@ -531,6 +582,10 @@ def run(limit=None, sample=False, match=None):
         _dupes(conn, backfill=True)
     if classifier.enabled():
         classifier.load()  # logs what it found, or why it could not
+        try:
+            rescore(conn)
+        except Exception as exc:  # scores only order the queue; never fatal
+            log.error("classifier rescore failed err=%s", f"{type(exc).__name__}: {exc}")
     elif config.CLASSIFIER != "none":
         log.info("image classifier off: no model file at %s", config.CLASSIFIER_MODEL)
 

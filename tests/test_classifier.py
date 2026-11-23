@@ -3,6 +3,7 @@ it, and training. The ONNX session is faked (a fixed projection of the
 pixels), so these run without the 100 MB model; the real one is exercised by
 scripts/smoke.sh inside the image."""
 import os
+import time
 
 import numpy as np
 import pytest
@@ -369,3 +370,58 @@ def test_train_heads_refuses_an_empty_library(tmp_path):
     db.connect(str(tmp_path / "e.db"))
     with pytest.raises(SystemExit):
         train_heads.main(["--db", str(tmp_path / "e.db"), "--out", str(tmp_path / "h.npz"), "--dry-run"])
+
+
+def _photo(conn, rel, emb, clutter=None, recheck=0, p=None):
+    cur = conn.execute(
+        "INSERT INTO files (rel, size, mtime, status, category, kept, clutter, clutter_recheck, cpu_clutter_p, "
+        "embedding) VALUES (?, 1, 'x', 'done', 'photo', 0, ?, ?, ?, ?)",
+        (rel, clutter, recheck, p, classifier.pack(emb) if emb is not None else None))
+    return cur.lastrowid
+
+
+def test_rescore_fills_the_scores_once_per_heads_and_settles_nothing(lib):
+    conn = db.connect(config.DB_PATH)
+    e = np.eye(DIM, dtype=np.float32)
+    blue = _photo(conn, "blue.jpg", e[2], clutter=0)
+    green = _photo(conn, "green.jpg", e[1], clutter=1)
+    _photo(conn, "none.jpg", None)
+    assert scanner.rescore(conn) == 2
+    got = {r["id"]: r for r in conn.execute("SELECT * FROM files")}
+    assert got[blue]["cpu_clutter_p"] > 0.9 and got[green]["cpu_clutter_p"] < 0.1
+    assert got[blue]["cpu_label"] == "photo" and 0 < got[blue]["cpu_blur_p"] < 1
+    # the answers themselves are left alone
+    assert (got[blue]["clutter"], got[green]["clutter"]) == (0, 1)
+    assert got[blue]["clutter_src"] is None and got[blue]["status"] == "done"
+    assert scanner.rescore(conn) == 0  # same heads: nothing to do
+    hf = classifier.load().heads_file
+    os.utime(hf, (time.time() + 60, time.time() + 60))
+    assert scanner.rescore(conn) == 2  # new heads: everything again
+
+
+def test_the_heads_batch_agrees_with_one_at_a_time(lib):
+    h = classifier.load().heads
+    X = np.random.default_rng(1).standard_normal((7, DIM)).astype(np.float32)
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    b = h.batch(X)
+    for k in range(7):
+        one = h.verdicts(X[k])
+        assert one["label"] == b["label"][k]
+        for q in ("label_p", "clutter_p", "blur_p"):
+            assert abs(one[q] - float(b[q][k])) < 1e-5
+
+
+def test_rechecks_go_likeliest_to_change_first(lib):
+    conn = db.connect(config.DB_PATH)
+    e = np.eye(DIM, dtype=np.float32)[1]
+    sure_clutter = _photo(conn, "a.jpg", e, clutter=1, recheck=1, p=0.9)
+    keeper_in_clutter = _photo(conn, "b.jpg", e, clutter=1, recheck=1, p=0.1)
+    clutter_in_photos = _photo(conn, "c.jpg", e, clutter=0, recheck=1, p=0.95)
+    unscored = _photo(conn, "d.jpg", e, clutter=1, recheck=1)
+    first_pass = _photo(conn, "e.jpg", e)
+    order = []
+    for _ in range(5):
+        row = scanner.next_clutter(conn)
+        order.append(row["id"])
+        conn.execute("UPDATE files SET clutter=0, clutter_recheck=0 WHERE id=?", (row["id"],))
+    assert order == [clutter_in_photos, keeper_in_clutter, sure_clutter, unscored, first_pass]
