@@ -270,3 +270,59 @@ def test_bulk_delete_takes_only_current_same_extras(client, monkeypatch):
     # and the plain gates still hold
     assert client.post("/api/dupes/delete-extras", headers={"Tailscale-User-Login": OP},
                        content=json.dumps({"ids": asked})).status_code == 403
+
+
+# ------------------------------------- fingerprinted but not labelled ----
+
+def test_unlabelled_duplicates_group_keep_and_delete_like_labelled_ones(client, monkeypatch):
+    """With MODEL=none (or before the model gets to them) a row stays pending
+    with a hash. It must group, keep, delete, and on a failed delete go back to
+    pending, not to Errors or to labelled."""
+    import contextlib
+    import json
+    from photosweep import config, db, dupes as wdupes, nextcloud
+    c = db.connect(config.DB_PATH)
+    orig = c.execute(
+        "INSERT INTO files (rel, size, mtime, status, width, height, dhash) VALUES (?,?,?,?,?,?,?)",
+        ("u.jpg", 100_000, "2020-01-01", "pending", 3000, 2000, _hash(7))).lastrowid
+    copy = c.execute(
+        "INSERT INTO files (rel, size, mtime, status, width, height, dhash) VALUES (?,?,?,?,?,?,?)",
+        ("u-copy.jpg", 50_000, "2020-01-01", "pending", 1000, 666, _hash(7, 1))).lastrowid
+    unprinted = c.execute("INSERT INTO files (rel, size, mtime) VALUES ('n.jpg', 1, 'x')").lastrowid
+    wdupes.link(c, never)
+    h = {"Tailscale-User-Login": OP}
+    same = client.get("/api/dupes?tier=same&limit=100", headers=h).json()
+    assert [[i["id"] for i in g["items"]] for g in same["groups"] if g["items"][0]["id"] == orig] == [[orig, copy]]
+    assert copy in client.get("/api/dupes/extras?tier=same", headers=h).json()["ids"]
+
+    r = client.post("/api/keep", headers={**h, **WRITE}, content=json.dumps({"ids": [orig, copy]}))
+    assert r.json()["updated"] == 2
+    assert client.get("/api/summary", headers=h).json()["counts"]["kept"] == 2
+    client.post("/api/keep", headers={**h, **WRITE}, content=json.dumps({"ids": [orig, copy], "keep": False}))
+
+    with open(config.NC_SECRET_FILE, "w") as f:
+        f.write("app-password")
+    monkeypatch.setattr(nextcloud, "client", lambda *_a: contextlib.nullcontext(None))
+    monkeypatch.setattr(nextcloud, "delete", lambda _c, _b, _u, _p, rel: "error:500")
+    r = client.post("/api/delete", headers={**h, **WRITE}, content=json.dumps({"ids": [copy, unprinted]})).json()
+    assert r["failed"] == 2
+    st = {x["id"]: x["status"] for x in c.execute("SELECT id, status FROM files")}
+    assert st[copy] == "pending" and st[unprinted] == "pending"  # back where they were
+    monkeypatch.setattr(nextcloud, "delete", lambda _c, _b, _u, _p, rel: "deleted")
+    client.post("/api/delete", headers={**h, **WRITE}, content=json.dumps({"ids": [copy]}))
+    assert c.execute("SELECT status FROM files WHERE id=?", (copy,)).fetchone()[0] == "deleted"
+    assert all(orig not in g["ids"] for g in wdupes.groups(c))  # its group is settled
+
+
+def test_summary_with_no_model_says_so_and_counts_fingerprints(client, monkeypatch):
+    from photosweep import config, db
+    c = db.connect(config.DB_PATH)
+    c.execute("INSERT INTO files (rel, size, mtime, status, dhash) VALUES ('p.jpg', 1, 'x', 'pending', ?)", (_hash(9),))
+    c.execute("INSERT INTO files (rel, size, mtime) VALUES ('q.jpg', 1, 'x')")  # not reached yet
+    monkeypatch.setattr(config, "LABELLING", False)
+    monkeypatch.setattr(config, "ROUTER_URL", "https://api.example.com/v1")  # would be remote, if it were used
+    body = client.get("/api/summary", headers={"Tailscale-User-Login": OP}).json()
+    assert body["labelling"] is False
+    assert body["modelRemote"]["remote"] is False  # no model, so nothing leaves
+    p = body["progress"]
+    assert (p["total"], p["fingerprinted"]) == (6, 5)  # four labelled + p.jpg; q.jpg still to do

@@ -8,8 +8,10 @@ page and delete what you choose. Every delete goes to Nextcloud's **Deleted
 files**, so it can be undone.
 
 Nothing leaves your network by default. There is no cloud service and no
-account. If you have no GPU, you can point it at a cloud model instead, and it
-will refuse to until you say yes in writing: [No GPU?](#no-gpu-a-cloud-model-read-this-first)
+account. With no GPU, run it with no model at all and it is a duplicate finder
+that needs nothing but a CPU: [No GPU?](#no-gpu-duplicates-only-or-a-cloud-model).
+You can also point it at a cloud model, and it will refuse to until you say yes
+in writing.
 
 ![Duplicate groups, each led by its best copy](docs/screenshots/duplicates.png)
 
@@ -23,7 +25,9 @@ will refuse to until you say yes in writing: [No GPU?](#no-gpu-a-cloud-model-rea
 - **Finds duplicates that file-based tools miss.** A WhatsApp forward of a
   camera photo, a HEIC next to its JPEG, an `IMG_0205_1` re-import: different
   files, same picture. They are matched by a 256-bit perceptual hash of the
-  image. The groups come in two tiers:
+  image, with no model involved: every picture is fingerprinted first, so the
+  Duplicates tab fills in long before the labelling is done. The groups come
+  in two tiers:
   - **Same** holds copies. Each group puts its best copy first (most pixels,
     then a camera in the EXIF, then the larger file), and *Select all extras*
     selects every other copy across the whole library at once. The server checks
@@ -46,15 +50,26 @@ will refuse to until you say yes in writing: [No GPU?](#no-gpu-a-cloud-model-rea
   Any of these works: Nextcloud on the same machine, its data folder shared to
   the Docker host over NFS or SMB, or the folder synced there by the Nextcloud
   desktop client. A Nextcloud reachable only over the web is not supported yet.
-- **A GPU somewhere on your network.** Point `OLLAMA_URL` at any Ollama
-  server. On an RTX-class card, `qwen3-vl:8b` takes about 3 s per picture:
-  roughly a day and a half for 40,000 photos, once. The page is usable while it
-  runs. On a CPU it works, many times slower.
+- **A GPU somewhere on your network, for the sorting.** Point `OLLAMA_URL` at
+  any Ollama server. On an RTX-class card, `qwen3-vl:8b` takes about 3 s per
+  picture: roughly a day and a half for 40,000 photos, once. The page is usable
+  while it runs. On a CPU it works, many times slower. **Duplicates need no
+  GPU and no model**; see below.
 - **Docker with the compose plugin.**
 
-## No GPU? A cloud model (read this first)
+## No GPU? Duplicates only, or a cloud model
 
-Photo sweep can send its questions to a cloud vision model over the
+**Duplicates only.** Set `MODEL=none`. Every picture is still fingerprinted
+(a thumbnail, its size and camera, a sharpness score and the duplicate hash),
+the Duplicates tab works in full, and nothing is sent anywhere. The sorting
+tabs (Screenshots, Memes, Clutter, Blurry and the rest) are hidden, since they
+need a model. Fingerprinting is all decoding: on a desktop CPU with four
+workers, 12-megapixel JPEGs went at about 40 ms each, so 40,000 photos in under
+half an hour. A small NAS, or a library of HEIC, will be several times slower;
+that is an estimate, not a measurement. `FINGERPRINT_WORKERS` sets how many
+pictures are decoded at once (default: up to 4).
+
+**A cloud model (read this first).** Photo sweep can send its questions to a cloud vision model over the
 OpenAI-compatible API that most providers offer, several with a free tier.
 **Doing so sends a copy of every photo it labels to that company.** That is
 your whole library: family, children, documents, the inside of your home.
@@ -127,7 +142,7 @@ Edit `.env`:
 | `PHOTOS_DIR` | The folder on this machine: `<nextcloud data>/<user>/files/<folder>` |
 | `PUID` / `PGID` | The user that owns those files. `33` (www-data) for most installs |
 | `NC_BASE`, `NC_USER`, `NC_PREFIX` | Your Nextcloud address, the user, and the same folder as Nextcloud names it. Leave `NC_BASE` empty to browse without deleting |
-| `OLLAMA_URL`, `MODEL` | Your Ollama server, or keep the default to use the bundled one |
+| `OLLAMA_URL`, `MODEL` | Your Ollama server, or keep the default to use the bundled one. `MODEL=none` for duplicates only, with no model |
 
 Start it, set a password, and open `http://127.0.0.1:8087`:
 

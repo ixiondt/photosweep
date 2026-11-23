@@ -13,6 +13,13 @@ const TABS = [
   { key: "kept", label: "Kept", note: "Images you marked to keep. They never come back into the other tabs." },
   { key: "error", label: "Errors", note: "Files the scan could not read or label after three tries. Recheck tries again; an empty (0-byte) or garbage file will only fail again, so Delete those." },
 ];
+// The tabs that need a model. With MODEL=none they are hidden, and the page
+// is Duplicates, Kept and Errors.
+const LABEL_TABS = ["screenshot", "meme", "document", "junk", "clutter", "photo", "blurry"];
+function visibleTabs() {
+  const off = state.summary && state.summary.labelling === false;
+  return off ? TABS.filter((t) => !LABEL_TABS.includes(t.key)) : TABS;
+}
 // Recheck asks the model again: Errors are relabelled, photos get the clutter
 // and blur questions again from the original at a larger size.
 const RECHECKABLE = ["photo", "clutter", "blurry", "error"];
@@ -111,12 +118,24 @@ function renderSummary() {
   const s = state.summary;
   if (!s) return;
   const p = s.progress;
-  const pct = p.total ? Math.round((p.labelled / p.total) * 100) : 0;
-  let line = `${fmt(p.labelled)} of ${fmt(p.total)} labelled (${pct}%)`;
-  if (s.paused) line += " · paused";
-  else if (p.pending && p.perHour) line += ` · about ${fmt(p.perHour)} an hour · ${p.etaHours} h left`;
-  else if (p.pending) line += " · waiting for the model";
-  else line += " · scan complete";
+  // Fingerprinting (no model) comes first; labelling follows when there is a model.
+  const printing = p.fingerprinted < p.total;
+  const done = s.labelling ? p.labelled : p.fingerprinted;
+  const pct = p.total ? Math.round((done / p.total) * 100) : 0;
+  let line;
+  if (!s.labelling) {
+    line = `${fmt(p.fingerprinted)} of ${fmt(p.total)} fingerprinted (${pct}%) · no model, so duplicates only`;
+    line += s.paused ? " · paused" : printing ? "" : " · scan complete";
+  } else if (printing) {
+    line = `Fingerprinting ${fmt(p.fingerprinted)} of ${fmt(p.total)} for duplicates, then labelling`;
+    if (s.paused) line += " · paused";
+  } else {
+    line = `${fmt(p.labelled)} of ${fmt(p.total)} labelled (${pct}%)`;
+    if (s.paused) line += " · paused";
+    else if (p.pending && p.perHour) line += ` · about ${fmt(p.perHour)} an hour · ${p.etaHours} h left`;
+    else if (p.pending) line += " · waiting for the model";
+    else line += " · scan complete";
+  }
   if (p.deleted) line += ` · ${fmt(p.deleted)} deleted`;
   const b = s.blurCheck;
   if (b && b.total && b.checked < b.total) line += ` · blur check ${fmt(b.checked)} of ${fmt(b.total)} photos`;
@@ -137,6 +156,9 @@ function renderSummary() {
     const el = document.querySelector(`[data-tab="${t.key}"] .tab-count`);
     if (el) el.textContent = fmt(s.counts[t.key] || 0);
   }
+  const shown = visibleTabs();
+  for (const el of document.querySelectorAll(".tab")) el.hidden = !shown.some((t) => t.key === el.dataset.tab);
+  if (!shown.some((t) => t.key === state.tab)) switchTab("dupes");
 }
 
 // --------------------------------------------------------------- tabs ---
@@ -161,8 +183,9 @@ function renderTabs() {
   }));
   wrap.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-    const i = TABS.findIndex((t) => t.key === state.tab);
-    const next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length];
+    const tabs = visibleTabs();
+    const i = tabs.findIndex((t) => t.key === state.tab);
+    const next = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
     switchTab(next.key);
     document.querySelector(`[data-tab="${next.key}"]`).focus();
   });

@@ -25,7 +25,8 @@ async def keep(request: Request):
     c = conn()
     marks = ",".join("?" * len(ids))
     with db.immediate(c):
-        n = c.execute(f"UPDATE files SET kept=? WHERE status='done' AND id IN ({marks})", [flag, *ids]).rowcount
+        # a fingerprinted file not yet labelled (or never, with MODEL=none) can be kept too
+        n = c.execute(f"UPDATE files SET kept=? WHERE {db.LIVE} AND id IN ({marks})", [flag, *ids]).rowcount
         db.audit(c, who, "keep" if flag else "unkeep", {"ids": ids, "n": n})
     return {"updated": n}
 
@@ -134,9 +135,12 @@ def _delete_batch(who, ids, password):
     c = conn()
     marks = ",".join("?" * len(ids))
     with db.immediate(c):
+        before = {r["id"]: r["status"] for r in c.execute(
+            f"SELECT id, status FROM files WHERE id IN ({marks})", ids)}
         claimed = c.execute(
-            # Errors rows too: an empty (0-byte) or garbage file can only be cleared this way
-            f"UPDATE files SET status='deleting' WHERE status IN ('done','error') AND id IN ({marks}) "
+            # Errors rows too: an empty (0-byte) or garbage file can only be cleared this way.
+            # Pending too: a duplicate is found before it is labelled, or with no model at all.
+            f"UPDATE files SET status='deleting' WHERE status IN ('pending','done','error') AND id IN ({marks}) "
             "RETURNING id, rel",
             ids).fetchall()
     results = {"deleted": 0, "gone": 0, "failed": 0}
@@ -161,9 +165,9 @@ def _delete_batch(who, ids, password):
                         break  # a credential problem will not fix itself on the next file
     finally:
         with db.immediate(c):
-            # back to where it came from: only a labelled row has a category
-            c.execute("UPDATE files SET status = CASE WHEN category IS NULL THEN 'error' ELSE 'done' END "
-                      f"WHERE status='deleting' AND id IN ({marks})", ids)
+            # back to exactly where it came from: labelled, Errors, or still pending
+            c.executemany("UPDATE files SET status=? WHERE id=? AND status='deleting'",
+                          [(before[r["id"]], r["id"]) for r in claimed])
     if failed:
         log.warning("delete failures n=%d first=%s", len(failed), failed[0])
     return {**results, "failedIds": [f["id"] for f in failed]}
