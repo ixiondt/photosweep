@@ -372,6 +372,10 @@ def label_one(conn, http, token, row, prepared=None):
     return category, confidence, ms
 
 
+def _now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def next_blur(conn):
     """The next photo to ask the blur question of. Likeliest-blurry first, so
     the top of the Blurry tab is settled within hours rather than at the end:
@@ -428,9 +432,9 @@ def judge_one(conn, http, token, row):
             except classify.BadVerdict as exc:
                 log.warning("blur check: bad verdict id=%d sampled=%s err=%s", row["id"], sample, exc)
     with db.immediate(conn):
-        conn.execute("UPDATE files SET blurry=?, blur_conf=?, blur_recheck=0, blur_src='model' "
+        conn.execute("UPDATE files SET blurry=?, blur_conf=?, blur_recheck=0, blur_src='model', asked_at=? "
                      "WHERE id=? AND (blurry IS NULL OR blur_recheck = 1)",
-                     (blurry, conf, row["id"]))
+                     (blurry, conf, _now(), row["id"]))
     return blurry
 
 
@@ -489,9 +493,9 @@ def clutter_one(conn, http, token, row):
                 log.warning("clutter check: bad verdict id=%d sampled=%s err=%s", row["id"], sample, exc)
     with db.immediate(conn):
         conn.execute("UPDATE files SET clutter=?, clutter_conf=?, clutter_reason=?, clutter_recheck=0, "
-                     "clutter_src='model' "
+                     "clutter_src='model', asked_at=? "
                      "WHERE id=? AND (clutter IS NULL OR clutter_recheck = 1)",
-                     (verdict, conf, reason, row["id"]))
+                     (verdict, conf, reason, _now(), row["id"]))
     return verdict
 
 

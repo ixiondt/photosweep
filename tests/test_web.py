@@ -257,3 +257,28 @@ def test_source_filter_narrows_any_tab_and_reports_each_count(client):
     assert [i["rel"] for i in get("camera")["items"]] == ["2020/cam.jpg"]
     r = client.get("/api/items?tab=photo&source=x%27%20OR%201=1--", headers=who())
     assert r.status_code == 400 and r.json()["code"] == "BAD_REQUEST"
+
+
+def test_status_counts_re_asks_as_unchecked_and_their_pace(client):
+    """A re-ask is work still to do, and a photo in Clutter is never asked
+    about blur, so neither may leave the status line stuck at 'complete'."""
+    import time
+    from photosweep import config, db
+    before = client.get("/api/summary", headers=who()).json()
+    recent = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 60))
+    c = db.connect(config.DB_PATH)
+    c.executemany(
+        "INSERT INTO files (rel, size, mtime, status, category, confidence, kept, blurry, clutter, "
+        "clutter_recheck, asked_at) VALUES (?,1,'x','done','photo',95,0,?,?,?,?)",
+        [("r/answered.jpg", 0, 0, 0, recent),      # both questions settled, answered a minute ago
+         ("r/re-ask.jpg", 0, 1, 1, recent),        # waiting for a clutter re-ask
+         ("r/clutter.jpg", None, 1, 0, None),      # in Clutter: never asked about blur
+         ("r/old.jpg", 0, 0, 0, "2000-01-01T00:00:00")])
+    s = client.get("/api/summary", headers=who()).json()
+    b0, c0 = before["blurCheck"], before["clutterCheck"]
+    # the two in Clutter (re-ask.jpg is clutter=1 until re-asked) are outside the blur total
+    assert s["blurCheck"] == {"checked": b0["checked"] + 2, "total": b0["total"] + 2}
+    assert s["clutterCheck"] == {"checked": c0["checked"] + 3, "total": c0["total"] + 4}
+    q = s["questions"]
+    assert q["rechecks"] == 1 and q["left"] == before["questions"]["left"] + 1
+    assert q["perHour"] == 4 and q["etaHours"] == round(q["left"] / 4, 1)  # two in the last half hour

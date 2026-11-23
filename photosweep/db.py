@@ -144,6 +144,9 @@ _ADDED = [
     ("blur_src", "TEXT"),
     # 1 = embedding compared against every other one and its pairs stored
     ("embed_linked", "INTEGER NOT NULL DEFAULT 0"),
+    # when the vision model last answered a blur or clutter question for this
+    # row (UTC, the scanned_at format): the status line's pace for re-asks
+    ("asked_at", "TEXT"),
 ]
 
 

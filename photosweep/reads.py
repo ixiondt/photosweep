@@ -68,8 +68,15 @@ def summary(request: Request):
     counts["blurry"] = c.execute(f"SELECT count(*) FROM files WHERE {BLURRY_WHERE}",
                                  (config.BLUR_MAX,)).fetchone()[0]
     counts["clutter"] = c.execute(f"SELECT count(*) FROM files WHERE {CLUTTER_WHERE}").fetchone()[0]
-    blur_checked, clutter_checked, photo_total = c.execute(
-        "SELECT count(blurry), count(clutter), count(*) FROM files "
+    # What is left of each second question, as the scanner sees it (next_blur,
+    # next_clutter): a photo waiting for a re-ask is not checked yet, and a
+    # photo in Clutter is never asked about blur, so it is not in that total.
+    blur_left, blur_total, clutter_left, clutter_rechecks, photo_total = c.execute(
+        "SELECT coalesce(sum((blurry IS NULL OR blur_recheck = 1) "
+        "                    AND (coalesce(clutter, -1) != 1 OR blur_recheck = 1)), 0), "
+        "       coalesce(sum(coalesce(clutter, -1) != 1 OR blur_recheck = 1), 0), "
+        "       coalesce(sum(clutter IS NULL OR clutter_recheck = 1), 0), "
+        "       coalesce(sum(clutter_recheck = 1), 0), count(*) FROM files "
         "WHERE status='done' AND kept=0 AND category='photo'").fetchone()
     counts["kept"] = c.execute(f"SELECT count(*) FROM files WHERE {db.LIVE} AND kept=1").fetchone()[0]
     counts["error"] = c.execute("SELECT count(*) FROM files WHERE status='error'").fetchone()[0]
@@ -81,6 +88,8 @@ def summary(request: Request):
     since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 1800))
     recent = c.execute("SELECT count(*) FROM files WHERE scanned_at >= ?", (since,)).fetchone()[0]
     per_hour = recent * 2
+    asked = c.execute("SELECT count(*) FROM files WHERE asked_at >= ?", (since,)).fetchone()[0] * 2
+    side_left = blur_left + clutter_left
     pending = status.get("pending", 0)
     # the model-free first step: a pending row is fingerprinted once it has a
     # hash; a labelled or failed one is past that step either way (a labelled
@@ -106,8 +115,11 @@ def summary(request: Request):
         # with no model nothing is sent anywhere, whatever the address says
         "modelRemote": remote.status() if config.LABELLING else {"remote": False, "host": "", "allowed": True},
         "blurMax": config.BLUR_MAX,
-        "blurCheck": {"checked": blur_checked, "total": photo_total},
-        "clutterCheck": {"checked": clutter_checked, "total": photo_total},
+        "blurCheck": {"checked": blur_total - blur_left, "total": blur_total},
+        "clutterCheck": {"checked": photo_total - clutter_left, "total": photo_total},
+        # the second questions still to ask, re-asks included, and their pace
+        "questions": {"left": side_left, "rechecks": clutter_rechecks, "perHour": asked,
+                      "etaHours": round(side_left / asked, 1) if asked and side_left else None},
         "dupGroups": {t: dup[t] for t in dupes.TIERS},
         "dupExtras": dup["deletable"],
     }

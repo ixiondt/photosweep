@@ -141,7 +141,13 @@ function renderSummary() {
     if (s.paused) line += " · paused";
     else if (p.pending && p.perHour) line += ` · about ${fmt(p.perHour)} an hour · ${p.etaHours} h left`;
     else if (p.pending) line += " · waiting for the model";
-    else line += " · scan complete";
+    else if (!(s.questions && s.questions.left)) line += " · scan complete";
+  }
+  const q = s.questions;
+  if (s.visionModel && !printing && !p.pending && q && q.left) {
+    // labelling is done; the blur and clutter questions (re-asks included) are not
+    line += q.rechecks ? ` · re-asking ${fmt(q.rechecks)} for clutter` : " · checking blur and clutter";
+    if (!s.paused && q.perHour) line += `, about ${fmt(q.perHour)} an hour, ${q.etaHours} h left`;
   }
   if (p.deleted) line += ` · ${fmt(p.deleted)} deleted`;
   const b = s.blurCheck;
