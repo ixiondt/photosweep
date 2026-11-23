@@ -118,6 +118,19 @@ _ADDED = [
     ("dhash", "TEXT"),
     # 1 = compared against every other hashed file and its pairs stored
     ("dup_linked", "INTEGER NOT NULL DEFAULT 0"),
+    # the image classifier (classifier.py): the thumbnail's embedding, float16,
+    # and what the heads made of it, kept whether or not it decided anything
+    ("embedding", "BLOB"),
+    ("cpu_label", "TEXT"),
+    ("cpu_label_p", "REAL"),
+    ("cpu_clutter_p", "REAL"),
+    ("cpu_blur_p", "REAL"),
+    # who settled each answer: 'model' (the vision model) or 'classifier'.
+    # NULL on rows from before the classifier, which were all the model's.
+    # train_heads learns only from the model's answers and the owner's actions.
+    ("label_src", "TEXT"),
+    ("clutter_src", "TEXT"),
+    ("blur_src", "TEXT"),
 ]
 
 
@@ -138,6 +151,8 @@ def _migrate(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS files_unlinked ON files (dup_linked) WHERE dhash IS NOT NULL")
     # the fingerprint stage's queue: on disk, not yet decoded
     conn.execute("CREATE INDEX IF NOT EXISTS files_unprinted ON files (id) WHERE status='pending' AND dhash IS NULL")
+    # the embedding backfill's queue: rows from before the classifier
+    conn.execute("CREATE INDEX IF NOT EXISTS files_unembedded ON files (id) WHERE embedding IS NULL")
 
 
 @contextmanager

@@ -37,6 +37,12 @@ LABELLING = MODEL.strip().lower() not in ("", "none")
 # Decoding is the whole cost, and Pillow releases the GIL while it decodes.
 FINGERPRINT_WORKERS = max(1, int(_env("FINGERPRINT_WORKERS", str(min(4, os.cpu_count() or 1)))))
 LINK_EVERY = 2000  # fingerprints between duplicate-linking passes during the first sweep
+# Stage 2, the image classifier on the CPU (classifier.py). "none" turns it off.
+# With MODEL=none it sorts everything itself; with a vision model as well, it
+# settles what it is sure of (CLASSIFIER_TRUST) and leaves the rest to the model.
+CLASSIFIER = _env("CLASSIFIER", "siglip").strip().lower()
+CLASSIFIER_MODEL = _env("CLASSIFIER_MODEL", "/app/models/siglip-b16-int8.onnx")
+CLASSIFIER_TRUST = float(_env("CLASSIFIER_TRUST", "0.95"))
 MODEL_TIMEOUT_S = float(_env("MODEL_TIMEOUT_S", "180"))
 # openai only: how the JSON answer is asked for. "schema" (structured output),
 # "object" (JSON mode) or "none" (the prompt alone), for services that refuse one.

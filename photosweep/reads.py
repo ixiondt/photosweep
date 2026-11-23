@@ -6,7 +6,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from . import config, db, dupes, imaging, remote
+from . import classifier, config, db, dupes, imaging, remote
 from .gate import conn, operator
 from .scanner import thumb_path
 
@@ -25,7 +25,7 @@ PAGE_MAX = 200
 GROUP_PAGE_MAX = 60
 ITEM_COLS = ("id, rel, category, confidence, reason, camera, width, height, name_hint, mtime, error, "
              "sharpness, blurry, blur_conf, blur_recheck, clutter, clutter_conf, clutter_reason, clutter_recheck, "
-             "size, kept")
+             "size, kept, label_src, clutter_src, blur_src")
 
 
 # ---------------------------------------------------------------- read ----
@@ -98,7 +98,11 @@ def summary(request: Request):
         "nextcloudSetUp": config.nextcloud_configured(),
         "signOut": config.AUTH_MODE == "password",
         "model": config.MODEL,
-        "labelling": config.LABELLING,
+        # the sorting tabs need something to sort: the vision model, the
+        # image classifier on the CPU, or both
+        "labelling": config.LABELLING or classifier.sorting(),
+        "visionModel": config.LABELLING,
+        "classifier": classifier.sorting(),
         # with no model nothing is sent anywhere, whatever the address says
         "modelRemote": remote.status() if config.LABELLING else {"remote": False, "host": "", "allowed": True},
         "blurMax": config.BLUR_MAX,

@@ -9,6 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# The image classifier's model (stage 2), pinned and checksummed: about 100 MB.
+# Its own layer, so a code change does not download it again.
+COPY photosweep/fetch_model.py /tmp/fetch_model.py
+RUN python /tmp/fetch_model.py /app/models/siglip-b16-int8.onnx && rm /tmp/fetch_model.py
 COPY photosweep ./photosweep
 
 # 33 is www-data, the user that owns a stock Nextcloud's data folder, so the
