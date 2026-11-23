@@ -26,9 +26,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import httpx
+import numpy as np
 from PIL import Image
 
-from . import classify, config, db, dupes, imaging, remote
+from . import classifier, classify, config, db, dupes, imaging, neardupes, remote
 
 log = logging.getLogger("photosweep.scanner")
 _stop = False
@@ -128,8 +129,9 @@ def fail(conn, file_id, message):
 def prepare(file_id, rel):
     """Decode one file and write its thumbnail. Touches no database, so it is
     safe on the prefetch thread while the model works on the previous image.
-    Returns ("ok", thumb, camera, width, height, sharpness, dhash), ("gone",)
-    or ("bad", message)."""
+    Returns ("ok", thumb, camera, width, height, sharpness, dhash, embedding),
+    ("gone",) or ("bad", message). The embedding is None when the image
+    classifier is off or could not read this one."""
     full = os.path.realpath(os.path.join(config.PICS_ROOT, rel))
     if not full.startswith(os.path.realpath(config.PICS_ROOT) + os.sep):
         return ("bad", "path escapes the library")
@@ -140,6 +142,7 @@ def prepare(file_id, rel):
         with Image.open(io.BytesIO(thumb)) as stored:
             sharp = imaging.sharpness(stored)
             dh = imaging.dhash(stored)
+            emb = _embed(file_id, stored)
     except FileNotFoundError:
         return ("gone",)
     except Exception as exc:  # any decoder failure is this file's problem
@@ -150,7 +153,62 @@ def prepare(file_id, rel):
     with open(tmp, "wb") as f:
         f.write(thumb)
     os.replace(tmp, path)
-    return ("ok", thumb, camera, width, height, sharp, dh)
+    return ("ok", thumb, camera, width, height, sharp, dh, emb)
+
+
+def _embed(file_id, img):
+    """The classifier's embedding of a thumbnail, or None. Never fatal: a
+    picture the classifier cannot read is still fingerprinted, and left for the
+    vision model (or unsorted, with none)."""
+    clf = classifier.load()
+    if clf is None:
+        return None
+    try:
+        return clf.embed(img)
+    except Exception as exc:
+        log.warning("classifier failed id=%d err=%s", file_id, type(exc).__name__)
+        return None
+
+
+def _side(v, model_too):
+    """Column updates for the clutter and blur answers the classifier is sure
+    enough of: all of them with no vision model, only those at or beyond
+    CLASSIFIER_TRUST either way when there is one to ask instead."""
+    trust = config.CLASSIFIER_TRUST
+    sets = {}
+    for p, col, conf, src, reason in ((v.get("clutter_p"), "clutter", "clutter_conf", "clutter_src", "clutter_reason"),
+                                      (v.get("blur_p"), "blurry", "blur_conf", "blur_src", None)):
+        if p is None or (model_too and trust > p > 1 - trust):
+            continue
+        sets[col] = int(p >= 0.5)
+        sets[conf] = round(100 * max(p, 1 - p))
+        sets[src] = "classifier"
+        if reason:
+            sets[reason] = "image classifier"
+    return sets
+
+
+def classifier_sets(emb, *, settle):
+    """Column updates for one embedding: the embedding and the heads' raw
+    answers always; with `settle`, the label too when the classifier may
+    decide it (always with MODEL=none, from CLASSIFIER_TRUST up with a vision
+    model), and for a photo the clutter and blur answers (_side)."""
+    if emb is None:
+        return {}
+    sets = {"embedding": classifier.pack(emb)}
+    clf = classifier.load()
+    v = clf.verdicts(emb) if clf is not None else None
+    if v is None:
+        return sets
+    sets.update(cpu_label=v["label"], cpu_label_p=v["label_p"], cpu_clutter_p=v["clutter_p"],
+                cpu_blur_p=v["blur_p"])
+    model_too = config.LABELLING
+    if settle and (not model_too or v["label_p"] >= config.CLASSIFIER_TRUST):
+        sets.update(status="done", category=v["label"], confidence=round(100 * v["label_p"]),
+                    reason="image classifier", label_src="classifier", scanned_at=db.now())
+        if v["label"] == "photo":
+            sets.update(_side(v, model_too))
+    return sets
 
 
 def load_or_prepare(row):
@@ -167,22 +225,96 @@ def load_or_prepare(row):
 
 
 def record_fingerprint(conn, row, prepared):
-    """Store what prepare() found. Returns True when the row is fingerprinted;
-    a vanished file becomes `gone`, an unreadable one costs an attempt."""
+    """Store what prepare() found, and what the classifier made of it.
+    Returns "sorted" when the classifier settled the label, "printed" when the
+    row is fingerprinted and still waits for one, None when a vanished file
+    became `gone` or an unreadable one cost an attempt."""
     if prepared[0] == "gone":
         with db.immediate(conn):
             conn.execute("UPDATE files SET status='gone' WHERE id=? AND status='pending'", (row["id"],))
-        return False
+        return None
     if prepared[0] == "bad":
         fail(conn, row["id"], prepared[1])
-        return False
-    _, _thumb, camera, width, height, sharp, dh = prepared
+        return None
+    _, _thumb, camera, width, height, sharp, dh, emb = prepared
+    sets = {"camera": camera, "width": width, "height": height, "name_hint": imaging.name_hint(row["rel"]),
+            "sharpness": sharp, "dhash": dh, "dup_linked": 0, "error": None}
+    sets.update(classifier_sets(emb, settle=True))
+    cols = ", ".join(f"{k}=?" for k in sets)
     with db.immediate(conn):
-        conn.execute(
-            "UPDATE files SET camera=?, width=?, height=?, name_hint=?, sharpness=?, dhash=?, dup_linked=0, "
-            "error=NULL WHERE id=? AND status='pending'",
-            (camera, width, height, imaging.name_hint(row["rel"]), sharp, dh, row["id"]))
-    return True
+        conn.execute(f"UPDATE files SET {cols} WHERE id=? AND status='pending'", [*sets.values(), row["id"]])
+    return "sorted" if sets.get("status") == "done" else "printed"
+
+
+def heads_signature():
+    """What identifies the loaded heads: their file's path, size and time."""
+    clf = classifier.load()
+    if clf is None or clf.heads is None:
+        return None
+    st = os.stat(clf.heads_file)
+    return f"{clf.heads_file}:{st.st_size}:{int(st.st_mtime)}"
+
+
+def rescore(conn, chunk=4000):
+    """Recompute the classifier's answers (cpu_label, cpu_*_p) for every stored
+    embedding when the heads have changed since the last pass, so the scores
+    the queue sorts by come from the heads in use. Only the cpu_* columns: an
+    answer already settled is never touched. Returns rows rescored."""
+    sig = heads_signature()
+    if sig is None or db.get_setting(conn, "heads_scored") == sig:
+        return 0
+    clf = classifier.load()
+    size = classifier.DIM * 2
+    done, last = 0, 0
+    while not _stop:
+        rows = conn.execute("SELECT id, embedding FROM files WHERE id > ? AND length(embedding) = ? "
+                            "ORDER BY id LIMIT ?", (last, size, chunk)).fetchall()
+        if not rows:
+            break
+        v = clf.heads.batch(np.stack([classifier.unpack(r["embedding"]) for r in rows]))
+
+        def p(name, k):
+            x = float(v[name][k])
+            return None if np.isnan(x) else round(x, 4)
+        with db.immediate(conn):
+            conn.executemany(
+                "UPDATE files SET cpu_label=?, cpu_label_p=?, cpu_clutter_p=?, cpu_blur_p=? WHERE id=?",
+                [(str(v["label"][k]), p("label_p", k), p("clutter_p", k), p("blur_p", k), r["id"])
+                 for k, r in enumerate(rows)])
+        done += len(rows)
+        last = rows[-1]["id"]
+    if not _stop:
+        db.set_setting(conn, "heads_scored", sig)
+        log.info("classifier rescored=%d heads=%s", done, sig)
+    return done
+
+
+def embed_backfill_batch(conn, pool, batch=32):
+    """Embed rows from before the classifier, from their stored thumbnails:
+    labelled and deleted rows for their embedding and the heads' answers (the
+    labels stand), and fingerprinted pending rows, which the classifier may
+    also sort. A row with no readable thumbnail gets an empty embedding, so it
+    is tried once. Returns how many rows it handled: 0 when there are none."""
+    if classifier.load() is None:
+        return 0
+    rows = conn.execute(
+        "SELECT id, status FROM files WHERE embedding IS NULL AND "
+        "(status IN ('done','deleted') OR (status='pending' AND dhash IS NOT NULL)) ORDER BY id LIMIT ?",
+        (batch,)).fetchall()
+
+    def one(r):
+        try:
+            with Image.open(thumb_path(r["id"])) as im:
+                return _embed(r["id"], im)
+        except (OSError, ValueError):
+            return None
+    for r, emb in zip(rows, pool.map(one, rows)):
+        sets = classifier_sets(emb, settle=r["status"] == "pending") if emb is not None else {"embedding": b""}
+        cols = ", ".join(f"{k}=?" for k in sets)
+        with db.immediate(conn):
+            conn.execute(f"UPDATE files SET {cols} WHERE id=? AND status=? AND embedding IS NULL",
+                         [*sets.values(), r["id"], r["status"]])
+    return len(rows)
 
 
 def fingerprint_batch(conn, pool, batch=32):
@@ -205,8 +337,12 @@ def label_one(conn, http, token, row, prepared=None):
     if prepared is None:
         prepared = load_or_prepare(row)
     if prepared[0] != "stored":
-        if not record_fingerprint(conn, row, prepared):
+        got = record_fingerprint(conn, row, prepared)
+        if got is None:
             return None
+        if got == "sorted":  # the classifier was sure: the vision model is not asked
+            r = conn.execute("SELECT category, confidence FROM files WHERE id=?", (row["id"],)).fetchone()
+            return r["category"], r["confidence"], 0
     thumb = prepared[1]
 
     t0 = time.monotonic()
@@ -222,8 +358,17 @@ def label_one(conn, http, token, row, prepared=None):
     with db.immediate(conn):
         conn.execute(
             "UPDATE files SET status='done', category=?, confidence=?, reason=?, model_ms=?, scanned_at=?, "
-            "error=NULL WHERE id=? AND status='pending'",
+            "error=NULL, label_src='model' WHERE id=? AND status='pending'",
             (category, confidence, reason, ms, db.now(), row["id"]))
+        if category == "photo":
+            # the clutter and blur answers the classifier is sure of: the
+            # vision model is asked only the rest (next_side)
+            cpu = conn.execute("SELECT cpu_clutter_p, cpu_blur_p FROM files WHERE id=?", (row["id"],)).fetchone()
+            side = _side({"clutter_p": cpu["cpu_clutter_p"], "blur_p": cpu["cpu_blur_p"]}, True) if cpu else {}
+            if side:
+                cols = ", ".join(f"{k}=?" for k in side)
+                conn.execute(f"UPDATE files SET {cols} WHERE id=? AND clutter IS NULL AND blurry IS NULL",
+                             [*side.values(), row["id"]])
     return category, confidence, ms
 
 
@@ -283,20 +428,27 @@ def judge_one(conn, http, token, row):
             except classify.BadVerdict as exc:
                 log.warning("blur check: bad verdict id=%d sampled=%s err=%s", row["id"], sample, exc)
     with db.immediate(conn):
-        conn.execute("UPDATE files SET blurry=?, blur_conf=?, blur_recheck=0 "
+        conn.execute("UPDATE files SET blurry=?, blur_conf=?, blur_recheck=0, blur_src='model' "
                      "WHERE id=? AND (blurry IS NULL OR blur_recheck = 1)",
                      (blurry, conf, row["id"]))
     return blurry
 
 
 def next_clutter(conn):
-    """The next photo to ask the clutter question of. Photos with no camera in
-    their EXIF first (chat forwards, saves, downloads: where the clutter is
-    thickest, about 8,500 of 33,000 on 2026-11-19), and photos already in
-    Blurry last, since those are in front of the owner already."""
+    """The next photo to ask the clutter question of. Rechecks first, and
+    among them the likeliest to change answer: a photo in Clutter the
+    classifier thinks a keeper, or a keeper it thinks clutter, so after a
+    reworded question the tab corrects itself in the first hours rather than
+    over the whole queue (3,362 re-asks on 2026-11-23). Then the first pass:
+    photos with no camera in their EXIF first (chat forwards, saves,
+    downloads: where the clutter is thickest, about 8,500 of 33,000 on
+    2026-11-19), and photos already in Blurry last, since those are in front
+    of the owner already."""
     return conn.execute(
         "SELECT id, rel, clutter_recheck FROM files WHERE status='done' AND kept=0 AND category='photo' "
         "AND (clutter IS NULL OR clutter_recheck = 1) ORDER BY clutter_recheck DESC, "
+        "CASE WHEN clutter_recheck = 1 AND clutter IN (0, 1) AND cpu_clutter_p IS NOT NULL "
+        "THEN abs(clutter - cpu_clutter_p) ELSE 0 END DESC, "
         "(camera IS NULL) DESC, (coalesce(blurry, -1) = 1), id LIMIT 1").fetchone()
 
 
@@ -336,7 +488,8 @@ def clutter_one(conn, http, token, row):
             except classify.BadVerdict as exc:
                 log.warning("clutter check: bad verdict id=%d sampled=%s err=%s", row["id"], sample, exc)
     with db.immediate(conn):
-        conn.execute("UPDATE files SET clutter=?, clutter_conf=?, clutter_reason=?, clutter_recheck=0 "
+        conn.execute("UPDATE files SET clutter=?, clutter_conf=?, clutter_reason=?, clutter_recheck=0, "
+                     "clutter_src='model' "
                      "WHERE id=? AND (clutter IS NULL OR clutter_recheck = 1)",
                      (verdict, conf, reason, row["id"]))
     return verdict
@@ -388,6 +541,9 @@ def _dupes(conn, backfill=False):
         linked, pairs = dupes.link(conn, lambda: _stop)
         if linked:
             log.info("duplicates linked=%d pairs=%d", linked, pairs)
+        linked, pairs = neardupes.link(conn, lambda: _stop)
+        if linked:
+            log.info("near-duplicates linked=%d pairs=%d", linked, pairs)
     except Exception as exc:
         log.error("duplicate linking failed err=%s", f"{type(exc).__name__}: {exc}")
 
@@ -424,6 +580,14 @@ def run(limit=None, sample=False, match=None):
         log.info("sharpness backfill scored=%d", scored)
     if limit is None:  # the service only; a timing run measures labelling
         _dupes(conn, backfill=True)
+    if classifier.enabled():
+        classifier.load()  # logs what it found, or why it could not
+        try:
+            rescore(conn)
+        except Exception as exc:  # scores only order the queue; never fatal
+            log.error("classifier rescore failed err=%s", f"{type(exc).__name__}: {exc}")
+    elif config.CLASSIFIER != "none":
+        log.info("image classifier off: no model file at %s", config.CLASSIFIER_MODEL)
 
     done, timings, backoff = 0, [], 5.0
     # The service fingerprints everything first (no model: Duplicates fills
@@ -439,6 +603,7 @@ def run(limit=None, sample=False, match=None):
     ahead = None  # (row, future of load_or_prepare())
     refused_logged = False
     printed = 0  # fingerprinted since the last duplicate-linking pass
+    embedded = 0  # embedded by the backfill this run
     with httpx.Client(timeout=httpx.Timeout(config.MODEL_TIMEOUT_S, connect=10.0)) as http, \
             ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch") as pool, \
             ThreadPoolExecutor(max_workers=config.FINGERPRINT_WORKERS, thread_name_prefix="print") as printers:
@@ -463,8 +628,19 @@ def run(limit=None, sample=False, match=None):
                     log.info("fingerprinting caught up")
                     _dupes(conn)
                     printed = 0
+                # rows from before the classifier: one pass, then never again
+                n = embed_backfill_batch(conn, printers)
+                if n:
+                    embedded += n
+                    if embedded % 2000 < n:
+                        log.info("classifier backfill embedded=%d", embedded)
+                    continue
+                if embedded:
+                    _dupes(conn)  # the backfilled embeddings, linked as near-duplicates
+                    embedded = 0
             if not config.LABELLING:
-                # MODEL=none: fingerprints and duplicates only; idle until the re-walk
+                # MODEL=none: the classifier sorted what it could while
+                # fingerprinting; nothing is left to ask. Idle until the re-walk.
                 if limit is not None:
                     break
                 time.sleep(60)

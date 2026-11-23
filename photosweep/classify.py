@@ -164,12 +164,28 @@ def parse_blur(content):
 # bias is right for the five-way label, where a wrong call files a real photo
 # as a screenshot. This question asks the narrower thing the owner wants
 # answered, and its answer only moves a photo into a tab to be looked at.
+#
+# Two themes moved from clutter to keeper on 2026-11-23, from what the owner
+# actually did on the Clutter tab rather than what was guessed up front: of
+# 2,133 reviewed, 11.5% kept overall, but about half of the bathroom, wall,
+# damage and renovation shots and a quarter of children's drawings, crafts and
+# builds. Objects, products, food and screens were kept 3-4% of the time and
+# stay clutter.
+# The first wording took every room as a keeper; probed against 60 deleted
+# photos it spared 17, ten of them plain rooms (kept only ~27% of the time), so
+# the house rule is now its records: damage, repairs, renovation, the outside.
+# Narrowed again the same day, by the owner, from the theme keep rates over
+# all 2,133 reviewed Clutter photos (zero-shot themes, counts only): the
+# outside of the house was kept 3% of the time, the garden 12%, against 38%
+# for renovation and repair and 26% for damage. So only work on the house and
+# children's work are keepers; the outside, the garden and a decorated room
+# are clutter unless something is being done to them.
 CLUTTER_PROMPT = """This image is in a personal photo library. Decide ONLY whether it is clutter the owner would not miss, or a keeper.
 
-- clutter: nothing worth remembering. A floor, wall, ceiling, carpet, ground or sky with no person or pet in it; an accidental or pocket shot; a frame too dark or washed out to show much; a random object, product, part, cable, light or appliance photographed for a moment's use; any screen or display photographed, whatever it shows (TV, monitor, laptop, phone, projector, car dashboard or stereo, baby monitor); a child's drawing, craft or schoolwork; an engraved, printed or decorated object; a sticky note, handwritten note, to-do list, scrap of paper, card, label, barcode, receipt or packaging; a puzzle, toy, game or printed picture on its own; an animal that is not a pet, seen in passing; an empty room, car park, road or sports field with nothing happening. A hand, finger or foot at the edge of such a shot does not make it a keeper: a person must be what the photo is of.
-- keeper: people, pets, family or friends; a place visited, an event or occasion, a shared meal; nature and scenery (a hike, a view, a beach, a sunset, flowers); the owner's house or garden shown on purpose (the house from outside, a decorated or finished room, a garden or yard). A plain room, a corner, or objects lying around indoors is not that. A dark, blurred or imperfect photo of people or pets is still a keeper.
+- clutter: nothing worth remembering. A patch of floor, carpet, ground or sky photographed by accident; an accidental or pocket shot; a frame too dark or washed out to show much; a random object, product, part, cable, light or appliance photographed for a moment's use; food or fridge contents on their own; any screen or display photographed, whatever it shows (TV, monitor, laptop, phone, projector, car dashboard or stereo, baby monitor); an engraved, printed or decorated object; a sticky note, handwritten note, to-do list, scrap of paper, card, label, barcode, receipt or packaging; a bought toy, puzzle, game or printed picture on its own; an animal that is not a pet, seen in passing; a plain, empty or everyday room, kitchen, garage or corner with nothing being done to it; the outside of a house, a garden or yard, or a decorated room with nothing being done to it; a car park, road, shop or sports field with nothing happening. A hand, finger or foot at the edge of such a shot does not make it a keeper: a person must be what the photo is of.
+- keeper: people, pets, family or friends; a place visited, an event or occasion, a shared meal; nature and scenery (a hike, a view, a beach, a sunset, flowers); a record of work on the owner's house: damage, a leak, a repair, construction or renovation in progress or just finished (a wall, ceiling, floor, bathroom or any room); something a child made or built (a drawing, painting, craft, schoolwork, a Lego or model build). A dark, blurred or imperfect photo of people or pets is still a keeper.
 
-The owner wants these gone. If no person or pet is the subject and it is not clearly an occasion, a place visited, nature, or the owner's house or garden, answer clutter.
+The owner wants clutter gone, but keeps records of work on the house and of the children's work. An ordinary room is not a record. If no person or pet is the subject and it is not clearly an occasion, a place visited, nature, work or damage on the house, or something a child made, answer clutter.
 
 Answer with JSON only: {"clutter": true or false, "confidence": integer 0-100, "reason": at most 10 words}"""
 

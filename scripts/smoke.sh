@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # smoke.sh -- build the image, run the tests in it, then bring the compose stack
 # up against three generated pictures and a stand-in model, and check the page
-# end to end: sign-in, labelling, and one duplicate group; then again from
-# empty with MODEL=none, where the copy must be found with nothing labelled.
+# end to end: sign-in, labelling, and one duplicate group; then from empty
+# with MODEL=none, where the image classifier must sort all three on the CPU;
+# then with CLASSIFIER=none too, where only the duplicate must be found.
 # Needs Docker with the compose plugin. Leaves nothing behind.
 #
 #   scripts/smoke.sh
@@ -132,32 +133,55 @@ echo "== sign out =="
 curl -s -b "$WORK/jar" -c "$WORK/jar" "${J[@]}" -d '{}' "$BASE/api/logout" >/dev/null
 [ "$(curl -s -o /dev/null -w '%{http_code}' -b "$WORK/jar" "$BASE/api/summary")" = 401 ] || fail "still signed in"
 
-echo "== no model: a fresh stack with MODEL=none finds the copy and labels nothing =="
-docker compose -p $P -f compose.yaml -f "$WORK/override.yaml" down -v >/dev/null 2>&1
+# A fresh, empty stack with the current .env, signed in.
+fresh() {
+	docker compose -p $P -f compose.yaml -f "$WORK/override.yaml" down -v >/dev/null 2>&1
+	docker compose -p $P -f compose.yaml -f "$WORK/override.yaml" up -d --quiet-pull >/dev/null 2>&1 || fail "compose up ($1)"
+	for _ in $(seq 30); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 1; done
+	printf '%s\n' "$PW" | docker compose -p $P exec -T web python -m photosweep.passwd --stdin >/dev/null
+	curl -s -c "$WORK/jar" "${J[@]}" -d "{\"password\":\"$PW\"}" "$BASE/api/login" | grep -q '"ok":true' || fail "sign-in ($1)"
+}
+# The summary once the copy is grouped and $1 appears in it, or after two minutes.
+settled() {
+	for _ in $(seq 60); do
+		S=$(curl -s -b "$WORK/jar" "$BASE/api/summary")
+		echo "$S" | grep -q '"dupGroups":{"same":1' && echo "$S" | grep -q "$1" && break
+		sleep 2
+	done
+	echo "$S"
+}
+
+echo "== no vision model: the image classifier sorts all three on the CPU =="
 sed -i 's/^MODEL=.*/MODEL=none/' "$WORK/.env"
-docker compose -p $P -f compose.yaml -f "$WORK/override.yaml" up -d --quiet-pull >/dev/null 2>&1 || fail "compose up (no model)"
-for _ in $(seq 30); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 1; done
-printf '%s
-' "$PW" | docker compose -p $P exec -T web python -m photosweep.passwd --stdin
-curl -s -c "$WORK/jar" "${J[@]}" -d "{\"password\":\"$PW\"}" "$BASE/api/login" | grep -q '"ok":true' || fail "sign-in (no model)"
-for _ in $(seq 60); do
-	S=$(curl -s -b "$WORK/jar" "$BASE/api/summary")
-	echo "$S" | grep -q '"dupGroups":{"same":1' && break
-	sleep 2
-done
-echo "$S" | python3 -c '
+fresh "classifier"
+settled '"pending":0' | python3 -c '
 import json, sys
 s = json.load(sys.stdin)
 p = s["progress"]
-print("fingerprinted", p["fingerprinted"], "of", p["total"], "| labelled", p["labelled"], "| dup groups", s["dupGroups"])
-assert s["labelling"] is False and s["model"] == "none"
-assert p["fingerprinted"] == 3 and p["labelled"] == 0, "no model, so nothing labelled"
-assert s["dupGroups"] == {"same": 1, "similar": 0}, "copy not grouped without a model"
-' || fail "no-model scan"
+print("fingerprinted", p["fingerprinted"], "of", p["total"], "| sorted", p["labelled"], "| dup groups", s["dupGroups"],
+      "| tabs", {k: v for k, v in s["counts"].items() if v})
+assert s["visionModel"] is False and s["classifier"] is True and s["labelling"] is True
+assert p["fingerprinted"] == 3 and p["labelled"] == 3, "the classifier should sort all three"
+assert s["dupGroups"] == {"same": 1, "similar": 0}, "copy not grouped"
+' || fail "classifier scan"
 curl -s -b "$WORK/jar" "$BASE/api/dupes?tier=same" | python3 -c '
 import json, sys
 g = json.load(sys.stdin)["groups"][0]["items"]
 assert g[0]["rel"] == "2024/IMG_0001.jpg", "the larger original should be the best copy"
-' || fail "no-model keeper"
+assert all(i["label_src"] == "classifier" for i in g), "sorted by the classifier"
+' || fail "classifier keeper"
+
+echo "== no model at all: CLASSIFIER=none as well finds the copy and sorts nothing =="
+echo "CLASSIFIER=none" >> "$WORK/.env"
+fresh "duplicates only"
+settled '"fingerprinted":3' | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+p = s["progress"]
+print("fingerprinted", p["fingerprinted"], "of", p["total"], "| labelled", p["labelled"], "| dup groups", s["dupGroups"])
+assert s["labelling"] is False and s["classifier"] is False
+assert p["fingerprinted"] == 3 and p["labelled"] == 0, "nothing to sort with"
+assert s["dupGroups"] == {"same": 1, "similar": 0}, "copy not grouped without a model"
+' || fail "duplicates-only scan"
 
 echo "SMOKE OK"

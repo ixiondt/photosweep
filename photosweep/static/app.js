@@ -23,6 +23,11 @@ function visibleTabs() {
 // Recheck asks the model again: Errors are relabelled, photos get the clutter
 // and blur questions again from the original at a larger size.
 const RECHECKABLE = ["photo", "clutter", "blurry", "error"];
+// Rechecking a photo asks the vision model again; with none configured only
+// Errors can be retried (they are fingerprinted and sorted again).
+function canRecheck(key) {
+  return RECHECKABLE.includes(key) && (key === "error" || state.summary?.visionModel !== false);
+}
 
 const PAGE = 120;
 const POLL_MS = 15000;
@@ -96,8 +101,9 @@ function clutterText(item) {
 
 function blurText(item) {
   if (item.blur_recheck) return "recheck queued";
-  if (item.blurry === 1) return `blurry, ${item.blur_conf}% sure`;
-  if (item.blurry === 0) return `sharp, ${item.blur_conf}% sure`;
+  const by = item.blur_src === "classifier" ? " (image classifier)" : "";
+  if (item.blurry === 1) return `blurry, ${item.blur_conf}% sure${by}`;
+  if (item.blurry === 0) return `sharp, ${item.blur_conf}% sure${by}`;
   if (item.blurry === -1) return "no answer; the pixel score decides";
   return "not checked yet; the pixel score decides";
 }
@@ -130,7 +136,8 @@ function renderSummary() {
     line = `Fingerprinting ${fmt(p.fingerprinted)} of ${fmt(p.total)} for duplicates, then labelling`;
     if (s.paused) line += " · paused";
   } else {
-    line = `${fmt(p.labelled)} of ${fmt(p.total)} labelled (${pct}%)`;
+    const verb = s.visionModel ? "labelled" : "sorted on this computer";
+    line = `${fmt(p.labelled)} of ${fmt(p.total)} ${verb} (${pct}%)`;
     if (s.paused) line += " · paused";
     else if (p.pending && p.perHour) line += ` · about ${fmt(p.perHour)} an hour · ${p.etaHours} h left`;
     else if (p.pending) line += " · waiting for the model";
@@ -156,6 +163,7 @@ function renderSummary() {
     const el = document.querySelector(`[data-tab="${t.key}"] .tab-count`);
     if (el) el.textContent = fmt(s.counts[t.key] || 0);
   }
+  $("recheck-btn").hidden = !canRecheck(state.tab);
   const shown = visibleTabs();
   for (const el of document.querySelectorAll(".tab")) el.hidden = !shown.some((t) => t.key === el.dataset.tab);
   if (!shown.some((t) => t.key === state.tab)) switchTab("dupes");
@@ -203,7 +211,7 @@ function switchTab(key) {
   syncDupControls();
   $("grid").classList.toggle("grid-groups", key === "dupes");
   $("keep-btn").textContent = key === "kept" ? "Un-keep" : "Keep";
-  $("recheck-btn").hidden = !RECHECKABLE.includes(key);
+  $("recheck-btn").hidden = !canRecheck(key);
   // Keep acts on labelled files only; Delete also clears unreadable ones from Errors
   $("keep-btn").hidden = key === "error";
   resetGrid();
@@ -706,13 +714,15 @@ function renderViewer() {
   const img = $("viewer-img");
   img.src = `/view/${item.id}`;
   img.alt = `Larger view of ${baseName(item.rel)}`;
-  $("viewer-cat").textContent = `${item.category} · ${item.confidence}%`;
+  // a fingerprinted picture can be opened from Duplicates before it is sorted
+  $("viewer-cat").textContent = item.category ? `${item.category} · ${item.confidence}%` : "not sorted yet";
   $("viewer-name").textContent = baseName(item.rel);
-  $("viewer-reason").textContent = item.reason || "";
+  $("viewer-reason").textContent = item.label_src === "classifier" ? "" : item.reason || "";
   const meta = $("viewer-meta");
   const rows = [["Folder", item.rel.includes("/") ? item.rel.slice(0, item.rel.lastIndexOf("/")) : "Pics"]];
   if (item.width && item.height) rows.push(["Size", `${item.width} × ${item.height}`]);
   rows.push(["Camera", item.camera || "none recorded"]);
+  if (item.category) rows.push(["Sorted by", item.label_src === "classifier" ? "the image classifier, on this computer" : "the vision model"]);
   if (item.name_hint) rows.push(["Name hint", item.name_hint]);
   if (item.category === "photo") rows.push(["Clutter check", clutterText(item)], ["Blur check", blurText(item)]);
   if (item.sharpness != null) rows.push(["Pixel sharpness", `${Math.round(item.sharpness)} (blurry under ${state.summary?.blurMax ?? "?"})`]);

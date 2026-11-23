@@ -37,6 +37,15 @@ LABELLING = MODEL.strip().lower() not in ("", "none")
 # Decoding is the whole cost, and Pillow releases the GIL while it decodes.
 FINGERPRINT_WORKERS = max(1, int(_env("FINGERPRINT_WORKERS", str(min(4, os.cpu_count() or 1)))))
 LINK_EVERY = 2000  # fingerprints between duplicate-linking passes during the first sweep
+# Stage 2, the image classifier on the CPU (classifier.py). "none" turns it off.
+# With MODEL=none it sorts everything itself; with a vision model as well, it
+# settles what it is sure of (CLASSIFIER_TRUST) and leaves the rest to the model.
+CLASSIFIER = _env("CLASSIFIER", "siglip").strip().lower()
+CLASSIFIER_MODEL = _env("CLASSIFIER_MODEL", "/app/models/siglip-b16-int8.onnx")
+CLASSIFIER_TRUST = float(_env("CLASSIFIER_TRUST", "0.95"))
+# Heads trained on this library (python -m photosweep.train_heads writes here);
+# used when present, else the heads bundled with the code.
+CLASSIFIER_HEADS = _env("CLASSIFIER_HEADS", os.path.join(DATA_DIR, "heads.npz"))
 MODEL_TIMEOUT_S = float(_env("MODEL_TIMEOUT_S", "180"))
 # openai only: how the JSON answer is asked for. "schema" (structured output),
 # "object" (JSON mode) or "none" (the prompt alone), for services that refuse one.
@@ -79,6 +88,11 @@ BLUR_MAX = float(_env("BLUR_MAX", "18"))  # photos scoring under this are listed
 # 50 unrelated photos began chaining into one group.
 DUP_SAME = int(_env("DUP_SAME", "12"))
 DUP_SIMILAR = int(_env("DUP_SIMILAR", "40"))
+# Near-duplicates from the classifier's embeddings (neardupes.py): pairs at
+# least this alike (cosine) join the Similar tier. 0 turns it off.
+DUP_EMBED = float(_env("DUP_EMBED", "0.96"))
+# No group larger than this: a bigger one is re-cut at a higher similarity.
+DUP_GROUP_MAX = int(_env("DUP_GROUP_MAX", "20"))
 MAX_ATTEMPTS = 3         # per file, for failures that are the file's fault
 REWALK_S = int(_env("REWALK_S", str(6 * 3600)))  # pick up photos added while the sweep is live
 
