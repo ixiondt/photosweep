@@ -281,4 +281,10 @@ def test_status_counts_re_asks_as_unchecked_and_their_pace(client):
     assert s["clutterCheck"] == {"checked": c0["checked"] + 3, "total": c0["total"] + 4}
     q = s["questions"]
     assert q["rechecks"] == 1 and q["left"] == before["questions"]["left"] + 1
-    assert q["perHour"] == 4 and q["etaHours"] == round(q["left"] / 4, 1)  # two in the last half hour
+    assert q["perHour"] == 0 and q["etaHours"] is None  # two answers are too few for a pace
+    c.executemany("INSERT INTO files (rel, size, mtime, status, category, asked_at) VALUES (?,1,'x','done','photo',?)",
+                  [(f"r/n{k}.jpg", time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 600 + k)))
+                   for k in range(10)])
+    q = client.get("/api/summary", headers=who()).json()["questions"]
+    # twelve answers over the ten minutes since the first: about 72 an hour, not 24
+    assert 70 <= q["perHour"] <= 73 and q["etaHours"] == round(q["left"] / q["perHour"], 1)

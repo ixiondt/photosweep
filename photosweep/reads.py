@@ -1,5 +1,6 @@
 """The read routes: progress, a tab of images, duplicate groups, and the
 two image renditions. Every one needs an operator (gate.operator)."""
+import calendar
 import os
 import time
 
@@ -88,7 +89,14 @@ def summary(request: Request):
     since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 1800))
     recent = c.execute("SELECT count(*) FROM files WHERE scanned_at >= ?", (since,)).fetchone()[0]
     per_hour = recent * 2
-    asked = c.execute("SELECT count(*) FROM files WHERE asked_at >= ?", (since,)).fetchone()[0] * 2
+    # answers an hour over the half hour, or over the time since the first
+    # answer in it when that is shorter (just after a restart, or the first
+    # answers of a re-ask), so the time left is not inflated while it warms up
+    n, first = c.execute("SELECT count(*), min(asked_at) FROM files WHERE asked_at >= ?", (since,)).fetchone()
+    asked = 0
+    if n >= 5:
+        span = time.time() - calendar.timegm(time.strptime(first, "%Y-%m-%dT%H:%M:%S"))
+        asked = round(n * 3600 / max(span, 120))
     side_left = blur_left + clutter_left
     pending = status.get("pending", 0)
     # the model-free first step: a pending row is fingerprinted once it has a
