@@ -158,7 +158,7 @@ def test_groups_tier_rank_and_count_only_live_unsettled_files(conn):
     assert got[tuple(sorted([small_kept, big]))]["ids"][0] == small_kept
     # deletable: Same extras minus the kept one is 2 (copies) + 1 (big, under a kept best) = 3
     assert dupes.counts(dupes.groups(conn)) == {"same": 2, "similar": 1, "mirrored": 0, "extras": 5,
-                                                "deletable": {"same": 3, "similar": 2}}
+                                                "deletable": {"same": 3, "similar": 2, "mirrored": 0}}
     assert set(dupes.extras(dupes.groups(conn), "same")) == {wa, re1, big}
     assert orig not in dupes.extras(dupes.groups(conn), "same")  # a best copy is never an extra
 
@@ -228,7 +228,7 @@ def test_dupes_pages_by_group_with_the_keeper_first(client):
     assert client.get("/api/dupes?tier=same&offset=1", headers=h).json()["groups"] == []
     summary = client.get("/api/summary", headers=h).json()
     assert summary["counts"]["dupes"] == 2 and summary["dupGroups"] == {"same": 1, "similar": 1}
-    assert summary["dupExtras"] == {"same": 1, "similar": 1}
+    assert summary["dupExtras"] == {"same": 1, "similar": 1, "mirrored": 0}
 
 
 WRITE = {"Origin": "http://testserver", "X-Photosweep": "1", "Content-Type": "application/json"}
@@ -237,6 +237,7 @@ WRITE = {"Origin": "http://testserver", "X-Photosweep": "1", "Content-Type": "ap
 def test_select_all_extras_is_same_only(client):
     h = {"Tailscale-User-Login": OP}
     assert client.get("/api/dupes/extras?tier=similar", headers=h).status_code == 400
+    assert client.get("/api/dupes/extras?tier=similar&mirrored=1", headers=h).json() == {"ids": [], "count": 0}
     body = client.get("/api/dupes/extras?tier=same", headers=h).json()
     from photosweep import config, db
     c = db.connect(config.DB_PATH)
@@ -391,6 +392,11 @@ def test_similar_marks_mirrored_copies_and_can_show_only_them(conn, monkeypatch)
     assert dupes.page(conn, "similar", 0, 10, cols)["total"] == 2
     only = dupes.page(conn, "similar", 0, 10, cols, only_mirrored=True)
     assert only["total"] == 1 and [i["mirror"] for i in only["groups"][0]["items"]] == [False, True]
+    assert dupes.mirrored_extras(list(gs.values())) == [flip]
+    conn.execute("UPDATE files SET kept=1 WHERE id=?", (flip,))
+    # a Keep is never selected, and wins: the kept flip ranks first, so the
+    # other copy becomes the mirrored one, as a Keep decides a Same group too
+    assert dupes.mirrored_extras(dupes.groups(conn)) == [best]
 
 
 def test_a_mirrored_pair_is_found_below_the_best_copy_too(conn, monkeypatch):
@@ -403,3 +409,4 @@ def test_a_mirrored_pair_is_found_below_the_best_copy_too(conn, monkeypatch):
     conn.executemany("INSERT INTO embed_pairs (a, b, sim) VALUES (?, ?, ?)", [(top, a, 0.97), (a, b, 0.98)])
     (g,) = dupes.groups(conn)
     assert g["ids"] == [top, a, b] and g["mirror"] == [False, False, True] and g["mirrored"]
+    assert dupes.mirrored_extras([g]) == [b]  # not `a`, a different photo of the group

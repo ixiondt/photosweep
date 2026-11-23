@@ -182,13 +182,18 @@ def dupe_groups(request: Request, tier: str = "same", offset: int = 0, limit: in
 
 
 @router.get("/api/dupes/extras")
-def dupe_extras(request: Request, tier: str = "same"):
+def dupe_extras(request: Request, tier: str = "same", mirrored: int = 0):
     """The ids Select all extras takes: every extra of every Same group,
-    loaded on the page or not. Same only: a Similar group is a judgement per
-    group, and bulk-selecting them deleted 886 burst frames on 2026-11-21."""
+    loaded on the page or not. In Similar, only with mirrored=1, and then
+    only the mirrored copies (dupes.mirrored_extras): a Similar group is
+    otherwise a judgement per group, and bulk-selecting them deleted 886
+    burst frames on 2026-11-21."""
     operator(request)
+    if tier == "similar" and mirrored:
+        ids = dupes.mirrored_extras(dupes.groups(conn()))
+        return {"ids": ids, "count": len(ids)}
     if tier != "same":
-        raise HTTPException(status_code=400, detail="only Same groups can be selected in bulk")
+        raise HTTPException(status_code=400, detail="only Same groups and mirrored copies can be selected in bulk")
     ids = dupes.extras(dupes.groups(conn()), tier)
     return {"ids": ids, "count": len(ids)}
 

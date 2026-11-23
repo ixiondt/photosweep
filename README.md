@@ -21,8 +21,12 @@ in writing.
 
 - **Sorts the library.** Each picture is labelled a screenshot, meme,
   document, junk or photo. Photos then get two narrower questions: is it
-  blurry, and is it clutter (a floor, a receipt, a photographed screen) rather
-  than a keeper (people, pets, places, occasions). Two engines answer, and
+  blurry, and is it clutter (a floor, a receipt, a photographed screen, a
+  plain room, the garden) rather than a keeper (people, pets, places,
+  occasions, work on the house, something a child made). Clutter is a pile to
+  review, not a delete list, so the rule leans towards clutter: a keeper in
+  it costs one Keep click, while clutter called a keeper is never looked at
+  again. Two engines answer, and
   work together: an **image classifier on the CPU** (SigLIP, built in) and a
   **vision model** (default `qwen3-vl:8b` on [Ollama](https://ollama.com)),
   which is optional. The classifier answers first and settles what it is sure
@@ -42,13 +46,21 @@ in writing.
     so there is deliberately no bulk select: you pick the ones to go. The
     classifier's embeddings add the look-alikes the hash misses (a crop, a
     rotation, a filter, a burst frame with movement), into Similar only:
-    [how](#how-the-duplicate-cut-offs-were-chosen).
+    [how](#how-the-duplicate-cut-offs-were-chosen). Among them are **mirrored
+    copies**, a selfie and its flipped forward, captioned *mirrored*.
+    *Mirrored only* shows just the groups holding one, and there *Select all
+    mirrored copies* takes the flipped copies and nothing else, never a best
+    copy, a Keep or a burst frame.
 - **Deletes safely.** The photo folder is mounted read-only. Deleting goes
   through Nextcloud's WebDAV API with an app password you can revoke, so files
   land in Deleted files and Nextcloud's index stays correct. Every action is
   written to an append-only, hash-chained audit log.
 - **Keeps up.** After the first pass it re-walks the folder every six hours and
-  labels only new pictures.
+  labels only new pictures. When a question is reworded, the photos it may
+  change are asked again, those the classifier most disagrees with first, so
+  the tabs correct themselves in the first hours rather than evenly over the
+  whole queue. The status line shows how many are left, the pace and the time
+  left.
 
 ![The viewer: what the model said, and why](docs/screenshots/viewer.png)
 
@@ -168,6 +180,7 @@ Edit `.env`:
 | `OLLAMA_URL`, `MODEL` | Your Ollama server, or keep the default to use the bundled one. `MODEL=none` to sort with the CPU classifier alone |
 | `CLASSIFIER` | `siglip` (default) or `none`. With `none` and `MODEL=none`, duplicates only |
 | `DUP_EMBED` | How alike two pictures' embeddings must be to show as look-alikes in Similar (default `0.96`; `0` turns it off) |
+| `DUP_MIRROR` | How close, in bits, a picture must be to another's flipped hash to be called its mirrored copy (default `24`) |
 | `CLASSIFIER_TRUST` | How sure the classifier must be to settle a question when a vision model is also set (default `0.95`). Lower sends fewer pictures to the model |
 
 Start it, set a password, and open `http://127.0.0.1:8087`:
@@ -236,6 +249,23 @@ groups on that library went from 497 to 1,518 and the pictures in them from
 1,386 to 4,041, with no new group over 20. Linking the whole library took 13 s
 on two cores, once; after that only new pictures are compared.
 
+**Mirrored copies.** A flipped picture's hash is unrelated to the original's:
+a WhatsApp selfie and its mirrored forward were 126 bits apart. So each
+picture also stores the hash of its thumbnail flipped left to right, and a
+Similar member within `DUP_MIRROR` bits (default 24) of the flipped hash of a
+copy ranked above it, and closer that way than as it is, is called mirrored.
+That pair came out 14 bits apart flipped; on the 37,500-picture library about
+440 look-alike pairs fell within 24 bits, in 368 of 1,515 Similar groups, and
+no random pair of 200,000 came within 20. The flipped hash is taken from the
+pixels, not worked out from the plain hash: that shortcut is wrong wherever
+neighbouring pixels are exactly equal (a blown sky, a white wall), 66 bits off
+on a test picture. Hashing every thumbnail flipped took about 40 s, once.
+
+Of a mirrored pair, the best copy is usually the camera original. With a
+selfie, though, the camera's version is the world's view and the mirrored one
+is what the screen showed; a line of text in the picture tells which reads
+the right way round.
+
 ## The CPU classifier
 
 **What it is.** Each picture's thumbnail goes through the image half of
@@ -288,12 +318,25 @@ vision model, which is itself an opinion, not ground truth.
 | Blur (14% of photos) | 29,204 | AUC 0.892; at its best guess 71% precision, 40% recall |
 | Blur, when at least 0.95 sure | 52% of photos | flagged blurry 97% precise, but few are flagged |
 
-The clutter question was reworded just before training (a room, a repair and
-a child's drawing became keepers), and the vision model's new answers were
-still coming in. Photos waiting for one were left out, so the clutter head
-learned from the owner's deletes and keeps and the model's keeper answers. It
-is cautious for now: when sure it is almost always right, but it settles only
-the plainest clutter itself and leaves the rest to the vision model.
+The clutter question was reworded just before training, and again after,
+from what the owner actually did with 2,133 reviewed Clutter photos (themes
+matched by the classifier's text side, counts only): renovation and repair
+were kept 38% of the time, damage 26%, children's drawings 24%, but the
+outside of the house only 3%, the garden 12% and food, screens and paper 0
+to 6%. So work on the house and something a child made are keepers, and a
+plain room, the outside of the house and the garden are clutter. Photos
+waiting for the vision model's new answer were left out of training, so the
+clutter head learned from the owner's deletes and keeps and the model's
+keeper answers. It is cautious for now: when sure it is almost always right,
+but it settles only the plainest clutter itself and leaves the rest to the
+vision model. It is retrained once the re-asks are in.
+
+**Picking the best shot of a burst** needs no model. On 2,113 burst groups
+where the owner kept some frames and deleted others, the ranking above (pixels,
+camera, blur verdict, file size) put a frame the owner kept first 97% of the
+time, against 50% by chance. The sharpest pixels and the blur head picked at
+chance, 45 to 52%: whatever makes one frame better than the next, it is not a
+blur they can see.
 
 Blur is the weakest question: a thumbnail hides much of what makes a photo
 soft, so with a vision model set, most blur questions still go to it. Memes are

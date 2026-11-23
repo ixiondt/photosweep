@@ -299,7 +299,8 @@ def counts(all_groups):
         c[g["tier"]] += 1
         c["mirrored"] += g.get("mirrored", False)
     return {**c, "extras": sum(len(g["ids"]) - 1 for g in all_groups),
-            "deletable": {t: len(extras(all_groups, t)) for t in TIERS}}
+            "deletable": {**{t: len(extras(all_groups, t)) for t in TIERS},
+                          "mirrored": len(mirrored_extras(all_groups))}}
 
 
 def extras(all_groups, tier):
@@ -307,6 +308,14 @@ def extras(all_groups, tier):
     what Select all extras takes, and all that a bulk delete may remove."""
     return [i for g in all_groups if g["tier"] == tier
             for i, kept in zip(g["ids"][1:], g["kept"][1:]) if not kept]
+
+
+def mirrored_extras(all_groups):
+    """Every copy captioned mirrored in Similar, unless kept: what Select all
+    mirrored copies takes. Only those: never a best copy, and never the burst
+    frames a mirrored pair's group may also hold, which are different photos."""
+    return [i for g in all_groups if g["tier"] == "similar"
+            for i, m, kept in zip(g["ids"], g["mirror"], g["kept"]) if m and not kept]
 
 
 def page(conn, tier, offset, limit, cols, only_mirrored=False):
