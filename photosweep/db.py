@@ -74,6 +74,12 @@ CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit
 GENESIS = "0" * 64
 
 
+# A file still in the library, as Duplicates and Keep see it: labelled, or
+# waiting for a label (with MODEL=none, waiting for good). A pending row only
+# ever has a dhash, and so a duplicate pair, once it has been fingerprinted.
+LIVE = "status IN ('pending','done')"
+
+
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -130,6 +136,8 @@ def _migrate(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS files_blur_verdict ON files (status, kept, category, blurry)")
     conn.execute("CREATE INDEX IF NOT EXISTS files_clutter ON files (status, kept, category, clutter)")
     conn.execute("CREATE INDEX IF NOT EXISTS files_unlinked ON files (dup_linked) WHERE dhash IS NOT NULL")
+    # the fingerprint stage's queue: on disk, not yet decoded
+    conn.execute("CREATE INDEX IF NOT EXISTS files_unprinted ON files (id) WHERE status='pending' AND dhash IS NULL")
 
 
 @contextmanager

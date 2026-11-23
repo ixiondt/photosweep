@@ -207,7 +207,7 @@ def test_delete_clears_errors_rows_and_a_failure_puts_each_row_back(client, monk
     assert status["2020/empty.jpg"] == "deleted"
     assert status["2020/stuck.jpg"] == "error"  # back to Errors, not promoted to labelled
     assert status["2020/b.jpg"] == "done"       # a labelled row goes back to labelled
-    assert status["2020/c.jpg"] == "pending"    # never claimable
+    assert status["2020/c.jpg"] == "pending"    # not asked for, untouched
     assert db.verify_audit(c) == (True, None)
 
 

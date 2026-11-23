@@ -1,11 +1,14 @@
-"""The scan: walk the library, then label one image at a time, alternating
-with a second question on the photos already labelled: is it clutter
-(classify.judge_clutter), is it blurry (classify.judge_blur).
+"""The scan: walk the library, fingerprint every picture (thumbnail, size,
+camera, sharpness, duplicate hash: no model), then label one image at a time,
+alternating with a second question on the photos already labelled: is it
+clutter (classify.judge_clutter), is it blurry (classify.judge_blur). With
+MODEL=none it stops after fingerprinting, and Duplicates still works in full.
 
     python -m photosweep.scanner              # the service: walk, label, idle, re-walk
     python -m photosweep.scanner --limit 50   # the timing run: label 50 and print a report
 
-Resumable by construction. A row is `pending` until it has a verdict, so a
+Resumable by construction. A row is `pending` until it has a verdict (a
+fingerprinted one has a dhash), so a
 restart, a reboot or a pause picks up exactly where it stopped. The pause flag
 is a row in `settings` that the web page flips; the loop checks it before every
 image.
@@ -100,7 +103,7 @@ def next_pending(conn, sample=False, match=None, exclude=None):
     """The next row to label: library order for the service, or a random pick
     (optionally filtered by a path substring) for a timing or accuracy sample.
     `exclude` is the row already in hand, so the prefetch picks the one after."""
-    sql = "SELECT id, rel, attempts FROM files WHERE status='pending' AND attempts < ?"
+    sql = "SELECT id, rel, attempts, dhash FROM files WHERE status='pending' AND attempts < ?"
     args = [config.MAX_ATTEMPTS]
     if exclude is not None:
         sql += " AND id != ?"
@@ -150,19 +153,61 @@ def prepare(file_id, rel):
     return ("ok", thumb, camera, width, height, sharp, dh)
 
 
-def label_one(conn, http, token, row, prepared=None):
-    """Label one row, from `prepared` when the prefetch already decoded it.
-    Raises classify.RouterUnavailable for the caller's backoff."""
-    if prepared is None:
-        prepared = prepare(row["id"], row["rel"])
+def load_or_prepare(row):
+    """The thumbnail to label from: ("stored", bytes) when the row was already
+    fingerprinted and its thumbnail is on disk, else a fresh prepare(). Touches
+    no database, so the prefetch thread may run it."""
+    if row["dhash"]:
+        try:
+            with open(thumb_path(row["id"]), "rb") as f:
+                return ("stored", f.read())
+        except OSError:
+            pass  # thumbnail lost: decode again
+    return prepare(row["id"], row["rel"])
+
+
+def record_fingerprint(conn, row, prepared):
+    """Store what prepare() found. Returns True when the row is fingerprinted;
+    a vanished file becomes `gone`, an unreadable one costs an attempt."""
     if prepared[0] == "gone":
         with db.immediate(conn):
-            conn.execute("UPDATE files SET status='gone' WHERE id=?", (row["id"],))
-        return None
+            conn.execute("UPDATE files SET status='gone' WHERE id=? AND status='pending'", (row["id"],))
+        return False
     if prepared[0] == "bad":
         fail(conn, row["id"], prepared[1])
-        return None
-    _, thumb, camera, width, height, sharp, dh = prepared
+        return False
+    _, _thumb, camera, width, height, sharp, dh = prepared
+    with db.immediate(conn):
+        conn.execute(
+            "UPDATE files SET camera=?, width=?, height=?, name_hint=?, sharpness=?, dhash=?, dup_linked=0, "
+            "error=NULL WHERE id=? AND status='pending'",
+            (camera, width, height, imaging.name_hint(row["rel"]), sharp, dh, row["id"]))
+    return True
+
+
+def fingerprint_batch(conn, pool, batch=32):
+    """Fingerprint the next `batch` pending pictures, decoding them on `pool`.
+    Returns how many rows it settled (fingerprinted, gone or failed): 0 when
+    the queue is empty."""
+    rows = conn.execute(
+        "SELECT id, rel, attempts FROM files WHERE status='pending' AND dhash IS NULL AND attempts < ? "
+        "ORDER BY id LIMIT ?", (config.MAX_ATTEMPTS, batch)).fetchall()
+    for row, prepared in zip(rows, pool.map(lambda r: prepare(r["id"], r["rel"]), rows)):
+        record_fingerprint(conn, row, prepared)
+    return len(rows)
+
+
+def label_one(conn, http, token, row, prepared=None):
+    """Label one row, from `prepared` when the prefetch already has it: a
+    stored thumbnail (load_or_prepare) or a fresh decode, which is recorded as
+    the row's fingerprint first. Raises classify.RouterUnavailable for the
+    caller's backoff."""
+    if prepared is None:
+        prepared = load_or_prepare(row)
+    if prepared[0] != "stored":
+        if not record_fingerprint(conn, row, prepared):
+            return None
+    thumb = prepared[1]
 
     t0 = time.monotonic()
     try:
@@ -176,11 +221,9 @@ def label_one(conn, http, token, row, prepared=None):
     ms = int((time.monotonic() - t0) * 1000)
     with db.immediate(conn):
         conn.execute(
-            "UPDATE files SET status='done', category=?, confidence=?, reason=?, camera=?, width=?, "
-            "height=?, name_hint=?, model_ms=?, scanned_at=?, sharpness=?, dhash=?, error=NULL "
-            "WHERE id=? AND status='pending'",
-            (category, confidence, reason, camera, width, height,
-             imaging.name_hint(row["rel"]), ms, db.now(), sharp, dh, row["id"]))
+            "UPDATE files SET status='done', category=?, confidence=?, reason=?, model_ms=?, scanned_at=?, "
+            "error=NULL WHERE id=? AND status='pending'",
+            (category, confidence, reason, ms, db.now(), row["id"]))
     return category, confidence, ms
 
 
@@ -383,19 +426,22 @@ def run(limit=None, sample=False, match=None):
         _dupes(conn, backfill=True)
 
     done, timings, backoff = 0, [], 5.0
-    # The service alternates one label with one second-question turn (a blur
-    # or clutter check, next_side) while both have work, and does those alone
-    # once labelling is done. Timing runs (--limit) measure labelling only and
-    # never take a side turn.
+    # The service fingerprints everything first (no model: Duplicates fills
+    # in within the hour), then alternates one label with one second-question
+    # turn (a blur or clutter check, next_side) while both have work, and does
+    # those alone once labelling is done. Timing runs (--limit) measure
+    # labelling only, fingerprint inline, and never take a side turn.
     side_due = False
     started = time.monotonic()
-    # One image is decoded ahead while the model labels the current one: the
+    # One image is loaded ahead while the model labels the current one: the
     # GPU otherwise sat idle ~0.5 s an image (2.77 s wall against a 2.27 s
     # model median, measured 2026-11-17). Still one request in flight.
-    ahead = None  # (row, future of prepare())
+    ahead = None  # (row, future of load_or_prepare())
     refused_logged = False
+    printed = 0  # fingerprinted since the last duplicate-linking pass
     with httpx.Client(timeout=httpx.Timeout(config.MODEL_TIMEOUT_S, connect=10.0)) as http, \
-            ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch") as pool:
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch") as pool, \
+            ThreadPoolExecutor(max_workers=config.FINGERPRINT_WORKERS, thread_name_prefix="print") as printers:
         while not _stop and (limit is None or done < limit):
             if db.get_setting(conn, "paused", "0") == "1":
                 ahead = None  # its thumbnail is harmless; it is re-prepared on resume
@@ -405,6 +451,24 @@ def run(limit=None, sample=False, match=None):
                 seen, added, gone = walk(conn)
                 log.info("rewalk seen=%d added=%d gone=%d", seen, added, gone)
                 last_walk = time.monotonic()
+            if limit is None:
+                n = fingerprint_batch(conn, printers)
+                if n:
+                    printed += n
+                    if printed >= config.LINK_EVERY:
+                        _dupes(conn)
+                        printed = 0
+                    continue
+                if printed:
+                    log.info("fingerprinting caught up")
+                    _dupes(conn)
+                    printed = 0
+            if not config.LABELLING:
+                # MODEL=none: fingerprints and duplicates only; idle until the re-walk
+                if limit is not None:
+                    break
+                time.sleep(60)
+                continue
             if not remote.allowed():
                 # A model outside this network, and no yes from the owner: the
                 # local work (walk, sharpness, duplicates) goes on; no photo is sent.
@@ -448,7 +512,7 @@ def run(limit=None, sample=False, match=None):
                         continue
                     time.sleep(60)  # idle until the next re-walk finds something
                     continue
-                fut = pool.submit(prepare, row["id"], row["rel"])
+                fut = pool.submit(load_or_prepare, row)
             ok, token = _token()
             if not ok:
                 log.error("no model token at %s; waiting", config.ROUTER_TOKEN_FILE)
@@ -459,7 +523,7 @@ def run(limit=None, sample=False, match=None):
             if limit is None or done + 1 < limit:
                 nxt = next_pending(conn, sample, match, exclude=row["id"])
                 if nxt is not None:
-                    ahead = (nxt, pool.submit(prepare, nxt["id"], nxt["rel"]))
+                    ahead = (nxt, pool.submit(load_or_prepare, nxt))
             try:
                 result = label_one(conn, http, token, row, prepared)
             except classify.RouterUnavailable as exc:

@@ -161,7 +161,7 @@ main:focus { outline: none; }
 /* .seg's display would otherwise beat the hidden attribute */
 .seg[hidden] { display: none; }
 /* same for buttons: Recheck showed on Kept and Duplicates, Keep on Errors (found 2026-11-21) */
-.btn[hidden] { display: none; }
+.btn[hidden], .tab[hidden] { display: none; }
 #source-seg button, #tier-seg button { font-variant-numeric: tabular-nums; }
 .seg button[aria-pressed="true"] { background: var(--surface-raised); border-color: var(--border); color: var(--text); }
 

@@ -347,3 +347,76 @@ def test_service_hashes_and_links_what_it_labels(lib, monkeypatch):
     # the fixture's four frames are each one flat colour, which is one picture
     # as far as a difference hash can tell: every pair, once
     assert conn.execute("SELECT count(*) FROM dup_pairs").fetchone()[0] == 6
+
+
+# --------------------------------------------- fingerprinting, no model ----
+
+def _until_idle(monkeypatch):
+    """The service's 60 s idle sleep ends the test."""
+    monkeypatch.setattr(scanner.time, "sleep", lambda s: setattr(scanner, "_stop", s == 60))
+
+
+def test_model_none_fingerprints_everything_and_finds_duplicates(lib, monkeypatch):
+    monkeypatch.setattr(config, "LABELLING", False)
+    asked = []
+    monkeypatch.setattr(classify, "classify", lambda *a, **k: asked.append(1) or ("photo", 90, "x"))
+    _until_idle(monkeypatch)
+    scanner.run()
+    got = rows(config.DB_PATH)
+    assert not asked  # no model was ever asked
+    pics = {k: v for k, v in got.items() if k != "broken.jpg"}
+    assert all(r["status"] == "pending" and r["dhash"] and r["sharpness"] is not None
+               and r["width"] == 64 and r["category"] is None for r in pics.values())
+    assert all(os.path.exists(scanner.thumb_path(r["id"])) for r in pics.values())
+    assert got["broken.jpg"]["status"] == "error"  # unreadable, parked as before
+    conn = db.connect(config.DB_PATH)
+    assert conn.execute("SELECT count(*) FROM dup_pairs").fetchone()[0] == 6  # four flat frames, every pair
+    assert len(scanner.dupes.groups(conn)) == 1  # and the page sees them, unlabelled
+
+
+def test_fingerprint_first_then_label_decodes_each_picture_once(lib, monkeypatch):
+    decoded, order = [], []
+    real = scanner.prepare
+
+    def counting(file_id, rel):
+        decoded.append(rel)
+        order.append("print")
+        return real(file_id, rel)
+    monkeypatch.setattr(scanner, "prepare", counting)
+    monkeypatch.setattr(classify, "classify", lambda *a, **k: order.append("label") or ("photo", 95, "x"))
+    monkeypatch.setattr(classify, "judge_blur", lambda *a, **k: (False, 90))
+    monkeypatch.setattr(classify, "judge_clutter", lambda *a, **k: (False, 90, "x"))
+    _until_idle(monkeypatch)
+    scanner.run()
+    good = [r for r in decoded if r != "2026/01/broken.jpg"]
+    assert sorted(good) == sorted(set(good)) and len(good) == 4  # one decode each; labelling read the stored thumb
+    assert order.index("label") >= 4 + config.MAX_ATTEMPTS  # every picture printed before the first label
+    assert all(r["status"] == "done" for k, r in rows(config.DB_PATH).items() if k != "broken.jpg")
+
+
+def test_a_lost_thumbnail_is_decoded_again_for_labelling(lib, monkeypatch):
+    monkeypatch.setattr(config, "LABELLING", False)
+    _until_idle(monkeypatch)
+    scanner.run()
+    conn = db.connect(config.DB_PATH)
+    row = scanner.next_pending(conn)
+    os.remove(scanner.thumb_path(row["id"]))
+    prepared = scanner.load_or_prepare(row)
+    assert prepared[0] == "ok" and os.path.exists(scanner.thumb_path(row["id"]))
+    with open(scanner.thumb_path(row["id"]), "rb") as f:
+        assert scanner.load_or_prepare(row) == ("stored", f.read())
+
+
+def test_a_refused_model_still_gets_every_duplicate(lib, monkeypatch):
+    # scanner's own reference: other test files re-import photosweep, so a fresh
+    # `from photosweep import remote` here can be a different module object
+    monkeypatch.setattr(scanner.remote, "allowed", lambda url=None: False)
+    asked = []
+    monkeypatch.setattr(classify, "classify", lambda *a, **k: asked.append(1) or ("photo", 90, "x"))
+    _until_idle(monkeypatch)
+    scanner.run()
+    conn = db.connect(config.DB_PATH)
+    assert conn.execute("SELECT count(*) FROM files WHERE dhash IS NOT NULL").fetchone()[0] == 4
+    assert conn.execute("SELECT count(*) FROM dup_pairs").fetchone()[0] == 6
+    assert conn.execute("SELECT count(*) FROM files WHERE status='done'").fetchone()[0] == 0
+    assert not asked

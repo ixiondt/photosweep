@@ -71,7 +71,7 @@ def summary(request: Request):
     blur_checked, clutter_checked, photo_total = c.execute(
         "SELECT count(blurry), count(clutter), count(*) FROM files "
         "WHERE status='done' AND kept=0 AND category='photo'").fetchone()
-    counts["kept"] = c.execute("SELECT count(*) FROM files WHERE status='done' AND kept=1").fetchone()[0]
+    counts["kept"] = c.execute(f"SELECT count(*) FROM files WHERE {db.LIVE} AND kept=1").fetchone()[0]
     counts["error"] = c.execute("SELECT count(*) FROM files WHERE status='error'").fetchone()[0]
     dup = dupes.counts(dupes.groups(c))
     counts["dupes"] = dup["extras"]  # the files beyond each group's best copy
@@ -82,10 +82,15 @@ def summary(request: Request):
     recent = c.execute("SELECT count(*) FROM files WHERE scanned_at >= ?", (since,)).fetchone()[0]
     per_hour = recent * 2
     pending = status.get("pending", 0)
+    # the model-free first step: a pending row is fingerprinted once it has a
+    # hash; a labelled or failed one is past that step either way (a labelled
+    # row whose thumbnail was lost has no hash and never will)
+    printed = c.execute("SELECT count(*) FROM files WHERE status='pending' AND dhash IS NOT NULL").fetchone()[0]
     return {
         "operator": who,
         "counts": counts,
         "progress": {"total": total, "labelled": labelled, "pending": pending,
+                     "fingerprinted": printed + labelled,
                      "deleted": status.get("deleted", 0), "perHour": per_hour,
                      "etaHours": round(pending / per_hour, 1) if per_hour > 0 and pending else None},
         "paused": db.get_setting(c, "paused", "0") == "1",
@@ -93,7 +98,9 @@ def summary(request: Request):
         "nextcloudSetUp": config.nextcloud_configured(),
         "signOut": config.AUTH_MODE == "password",
         "model": config.MODEL,
-        "modelRemote": remote.status(),
+        "labelling": config.LABELLING,
+        # with no model nothing is sent anywhere, whatever the address says
+        "modelRemote": remote.status() if config.LABELLING else {"remote": False, "host": "", "allowed": True},
         "blurMax": config.BLUR_MAX,
         "blurCheck": {"checked": blur_checked, "total": photo_total},
         "clutterCheck": {"checked": clutter_checked, "total": photo_total},
@@ -114,7 +121,7 @@ def items(request: Request, tab: str = "screenshot", min_conf: int = 0, offset: 
     offset = max(0, int(offset))
     min_conf = max(0, min(int(min_conf), 100))
     if tab == "kept":
-        where, args = "status='done' AND kept=1", []
+        where, args = f"{db.LIVE} AND kept=1", []
     elif tab == "error":
         where, args = "status='error'", []
     elif tab == "blurry":

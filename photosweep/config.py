@@ -30,6 +30,13 @@ MODEL_API = _env("MODEL_API", "ollama").strip().lower()
 ROUTER_URL = _env("MODEL_URL", _env("OLLAMA_URL", _env("ROUTER_URL", "http://ollama:11434"))).rstrip("/")
 ROUTER_TOKEN_FILE = _env("MODEL_KEY_FILE", _env("OLLAMA_TOKEN_FILE", _env("ROUTER_TOKEN_FILE", "")))
 MODEL = _env("MODEL", "qwen3-vl:8b")
+# MODEL=none: no model at all. Every picture is still fingerprinted, so
+# Duplicates works in full; the label tabs, Blurry and Clutter stay off.
+LABELLING = MODEL.strip().lower() not in ("", "none")
+# Pictures decoded at once while fingerprinting (thumbnail, sharpness, hash).
+# Decoding is the whole cost, and Pillow releases the GIL while it decodes.
+FINGERPRINT_WORKERS = max(1, int(_env("FINGERPRINT_WORKERS", str(min(4, os.cpu_count() or 1)))))
+LINK_EVERY = 2000  # fingerprints between duplicate-linking passes during the first sweep
 MODEL_TIMEOUT_S = float(_env("MODEL_TIMEOUT_S", "180"))
 # openai only: how the JSON answer is asked for. "schema" (structured output),
 # "object" (JSON mode) or "none" (the prompt alone), for services that refuse one.

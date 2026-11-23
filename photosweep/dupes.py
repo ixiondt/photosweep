@@ -182,8 +182,8 @@ def groups(conn):
     is already kept is settled and left out. Newest keeper first."""
     pairs = conn.execute(
         "SELECT p.a, p.b, p.dist FROM dup_pairs p "
-        "JOIN files fa ON fa.id = p.a AND fa.status = 'done' "
-        "JOIN files fb ON fb.id = p.b AND fb.status = 'done' WHERE p.dist <= ?",
+        f"JOIN files fa ON fa.id = p.a AND fa.{db.LIVE} "
+        f"JOIN files fb ON fb.id = p.b AND fb.{db.LIVE} WHERE p.dist <= ?",
         (config.DUP_SIMILAR,)).fetchall()
     if not pairs:
         return []
@@ -197,7 +197,7 @@ def groups(conn):
     for x in list(loose.parent):
         members[loose.find(x)].append(x)
     info = {r["id"]: r for r in conn.execute(
-        f"SELECT {_RANK_COLS} FROM files WHERE status='done' AND id IN "
+        f"SELECT {_RANK_COLS} FROM files WHERE {db.LIVE} AND id IN "
         "(SELECT a FROM dup_pairs UNION SELECT b FROM dup_pairs)")}
     out = []
     for ids in members.values():
