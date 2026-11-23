@@ -266,6 +266,9 @@ def test_train_heads_learns_separable_classes_and_honours_the_owner(tmp_path, mo
     conn.execute("UPDATE files SET kept=1 WHERE rel='241.jpg'")  # the first photo, a clutter one
     # answers waiting on a Recheck are in doubt, so neither head learns them
     conn.execute("UPDATE files SET clutter_recheck=1, blur_recheck=1 WHERE rel='244.jpg'")
+    # the owner deleted one called clutter: their call, weighted like a keep;
+    # one called a keeper but deleted (a duplicate copy) is only the model's answer
+    conn.execute("UPDATE files SET status='deleted' WHERE rel IN ('247.jpg', '248.jpg')")
     rows, X, fold = train_heads.load(str(path))
     assert len(fold) == len(rows) and set(fold.tolist()) <= set(range(train_heads.FOLDS))
     label, clutter, blur = train_heads.sets(rows)
@@ -275,6 +278,10 @@ def test_train_heads_learns_separable_classes_and_honours_the_owner(tmp_path, mo
     assert doubted and doubted[0] not in clutter[2] and doubted[0] not in blur[2]
     kept_at = [j for j, i in enumerate(clutter[2]) if rows[i]["kept"]]
     assert clutter[3][kept_at[0]] == 0 and clutter[4][kept_at[0]] == train_heads.OWNER_WEIGHT
+    at = {rows[i]["id"]: j for j, i in enumerate(clutter[2])}
+    for rel, want_y, want_w in (("247.jpg", 1, train_heads.OWNER_WEIGHT), ("248.jpg", 0, 1)):
+        j = at[conn.execute("SELECT id FROM files WHERE rel=?", (rel,)).fetchone()[0]]
+        assert (clutter[3][j], clutter[4][j]) == (want_y, want_w), rel
     out = tmp_path / "heads.npz"
     train_heads.main(["--db", str(path), "--out", str(out)])
     h = classifier.Heads(str(out))

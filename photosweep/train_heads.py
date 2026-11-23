@@ -9,7 +9,8 @@ prefers over the bundled heads; restart the scanner to load them.
 Learns only from what a vision model answered (label_src, clutter_src and
 blur_src not 'classifier') and from what the owner did: a photo they kept is
 a keeper whatever the model said, which is how the photos the owner rescued
-from Clutter teach it where the model was wrong. An answer waiting on a
+from Clutter teach it where the model was wrong; a photo called clutter that
+they deleted is their call too, and weighs the same. An answer waiting on a
 Recheck is left out: the owner, or a changed question, has put it in doubt. Every number it
 prints is out-of-fold: each picture scored by heads that never saw it, with
 every duplicate group (dup_pairs) kept inside one fold, so a copy in training
@@ -31,7 +32,7 @@ from . import classifier, config
 
 LABELS = ["screenshot", "meme", "document", "junk", "photo"]
 SCALE = 30.0      # logits = (x @ W) * scale + b, on unit-length x
-OWNER_WEIGHT = 3  # an owner's keep counts this many times a model's answer
+OWNER_WEIGHT = 3  # an owner's keep, or delete of clutter, counts this many times a model's answer
 FOLDS = 5
 HIDDEN = 256      # the yes/no networks' hidden units
 GAIN = 8.0        # input scale for the networks, on unit-length x
@@ -188,6 +189,10 @@ def sets(rows):
             continue
         if r["kept"]:
             cl_i.append(i); cl_y.append(0); cl_w.append(OWNER_WEIGHT)  # the owner said keeper
+        elif r["status"] == "deleted" and r["clutter"] == 1:
+            # the owner agreed: called clutter and deleted. Only clutter=1, since
+            # a photo deleted as a duplicate copy says nothing about clutter.
+            cl_i.append(i); cl_y.append(1); cl_w.append(OWNER_WEIGHT)
         elif r["clutter"] in (0, 1) and r["clutter_src"] in (None, "model") and not r["clutter_recheck"]:
             cl_i.append(i); cl_y.append(r["clutter"]); cl_w.append(1)
         if r["blurry"] in (0, 1) and r["blur_src"] in (None, "model") and not r["blur_recheck"]:
