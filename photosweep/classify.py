@@ -164,12 +164,19 @@ def parse_blur(content):
 # bias is right for the five-way label, where a wrong call files a real photo
 # as a screenshot. This question asks the narrower thing the owner wants
 # answered, and its answer only moves a photo into a tab to be looked at.
+#
+# Two themes moved from clutter to keeper on 2026-11-23, from what the owner
+# actually did on the Clutter tab rather than what was guessed up front: of
+# 2,133 reviewed, 11.5% kept overall, but about half of the bathroom, wall,
+# damage and renovation shots and a quarter of children's drawings, crafts and
+# builds. Objects, products, food and screens were kept 3-4% of the time and
+# stay clutter.
 CLUTTER_PROMPT = """This image is in a personal photo library. Decide ONLY whether it is clutter the owner would not miss, or a keeper.
 
-- clutter: nothing worth remembering. A floor, wall, ceiling, carpet, ground or sky with no person or pet in it; an accidental or pocket shot; a frame too dark or washed out to show much; a random object, product, part, cable, light or appliance photographed for a moment's use; any screen or display photographed, whatever it shows (TV, monitor, laptop, phone, projector, car dashboard or stereo, baby monitor); a child's drawing, craft or schoolwork; an engraved, printed or decorated object; a sticky note, handwritten note, to-do list, scrap of paper, card, label, barcode, receipt or packaging; a puzzle, toy, game or printed picture on its own; an animal that is not a pet, seen in passing; an empty room, car park, road or sports field with nothing happening. A hand, finger or foot at the edge of such a shot does not make it a keeper: a person must be what the photo is of.
-- keeper: people, pets, family or friends; a place visited, an event or occasion, a shared meal; nature and scenery (a hike, a view, a beach, a sunset, flowers); the owner's house or garden shown on purpose (the house from outside, a decorated or finished room, a garden or yard). A plain room, a corner, or objects lying around indoors is not that. A dark, blurred or imperfect photo of people or pets is still a keeper.
+- clutter: nothing worth remembering. A patch of floor, carpet, ground or sky photographed by accident; an accidental or pocket shot; a frame too dark or washed out to show much; a random object, product, part, cable, light or appliance photographed for a moment's use; food or fridge contents on their own; any screen or display photographed, whatever it shows (TV, monitor, laptop, phone, projector, car dashboard or stereo, baby monitor); an engraved, printed or decorated object; a sticky note, handwritten note, to-do list, scrap of paper, card, label, barcode, receipt or packaging; a bought toy, puzzle, game or printed picture on its own; an animal that is not a pet, seen in passing; a car park, road, shop or sports field with nothing happening. A hand, finger or foot at the edge of such a shot does not make it a keeper: a person must be what the photo is of.
+- keeper: people, pets, family or friends; a place visited, an event or occasion, a shared meal; nature and scenery (a hike, a view, a beach, a sunset, flowers); the owner's house or garden in any state, when a room or part of the house is what the photo is of (the house from outside, a room empty or furnished, a bathroom, a kitchen, a wall, ceiling or floor showing damage, a repair, construction or renovation, a garden or yard); something a child made or built (a drawing, painting, craft, schoolwork, a Lego or model build). A dark, blurred or imperfect photo of people or pets is still a keeper.
 
-The owner wants these gone. If no person or pet is the subject and it is not clearly an occasion, a place visited, nature, or the owner's house or garden, answer clutter.
+The owner wants clutter gone, but keeps records of the house and of the children's work. If no person or pet is the subject and it is not clearly an occasion, a place visited, nature, the owner's house, or something a child made, answer clutter.
 
 Answer with JSON only: {"clutter": true or false, "confidence": integer 0-100, "reason": at most 10 words}"""
 
