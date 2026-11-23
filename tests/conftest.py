@@ -17,10 +17,12 @@ def classifier_off(monkeypatch):
     to sort would otherwise get it. Set in the environment (for test files
     that re-import photosweep) and on any config already imported."""
     monkeypatch.setenv("CLASSIFIER", "none")
+    monkeypatch.setenv("CLASSIFIER_HEADS", "")  # never a heads.npz left in some data dir
     for name in ("photosweep.config",):
         mod = sys.modules.get(name)
         if mod is not None:
             monkeypatch.setattr(mod, "CLASSIFIER", "none")
+            monkeypatch.setattr(mod, "CLASSIFIER_HEADS", "")
     clf = sys.modules.get("photosweep.classifier")
     if clf is not None:
         clf.reset()

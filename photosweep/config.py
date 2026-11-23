@@ -43,6 +43,9 @@ LINK_EVERY = 2000  # fingerprints between duplicate-linking passes during the fi
 CLASSIFIER = _env("CLASSIFIER", "siglip").strip().lower()
 CLASSIFIER_MODEL = _env("CLASSIFIER_MODEL", "/app/models/siglip-b16-int8.onnx")
 CLASSIFIER_TRUST = float(_env("CLASSIFIER_TRUST", "0.95"))
+# Heads trained on this library (python -m photosweep.train_heads writes here);
+# used when present, else the heads bundled with the code.
+CLASSIFIER_HEADS = _env("CLASSIFIER_HEADS", os.path.join(DATA_DIR, "heads.npz"))
 MODEL_TIMEOUT_S = float(_env("MODEL_TIMEOUT_S", "180"))
 # openai only: how the JSON answer is asked for. "schema" (structured output),
 # "object" (JSON mode) or "none" (the prompt alone), for services that refuse one.

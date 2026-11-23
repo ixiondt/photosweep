@@ -264,7 +264,8 @@ def test_train_heads_learns_separable_classes_and_honours_the_owner(tmp_path, mo
                  "VALUES ('own.jpg', 1, 'x', 'done', 'meme', 'classifier', ?)", (vec("photo"),))
     # the owner kept one the model called clutter: it trains as a keeper
     conn.execute("UPDATE files SET kept=1 WHERE rel='241.jpg'")  # the first photo, a clutter one
-    rows, X = train_heads.load(str(path))
+    rows, X, fold = train_heads.load(str(path))
+    assert len(fold) == len(rows) and set(fold.tolist()) <= set(range(train_heads.FOLDS))
     label, clutter, blur = train_heads.sets(rows)
     assert len(label[2]) == n  # own.jpg left out
     kept_at = [j for j, i in enumerate(clutter[2]) if rows[i]["kept"]]
@@ -278,6 +279,78 @@ def test_train_heads_learns_separable_classes_and_honours_the_owner(tmp_path, mo
         v = classifier.unpack(vec(c))
         ok += h.verdicts(v)["label"] == c
     assert ok == 5
+    assert h.q["clutter"][0] == "net"  # the yes/no questions are networks
+    assert h.verdicts(classifier.unpack(vec("photo", 2.0)))["clutter_p"] > 0.5
+    assert h.verdicts(classifier.unpack(vec("photo")))["clutter_p"] < 0.5
+
+
+def test_folds_keep_a_duplicate_group_together(tmp_path):
+    conn = db.connect(str(tmp_path / "f.db"))
+    for i in range(1, 41):
+        conn.execute("INSERT INTO files (id, rel, size, mtime) VALUES (?, ?, 1, 'x')", (i, f"{i}.jpg"))
+    # one chain 1-2-3-...-20: a single group however it is linked
+    conn.executemany("INSERT INTO dup_pairs (a, b, dist) VALUES (?, ?, 5)", [(i, i + 1) for i in range(1, 20)])
+    f = train_heads.folds(conn, list(range(1, 41)))
+    assert len(set(f[:20].tolist())) == 1
+    assert len(set(f[20:].tolist())) > 1  # the loose ones spread out
+
+
+def test_platt_recovers_a_known_calibration_and_auc_ranks():
+    rng = np.random.default_rng(0)
+    z = rng.standard_normal(20000) * 3
+    y = (rng.random(20000) < classifier.sigmoid(0.5 * z - 1.0)).astype(int)
+    a, c = train_heads.platt(z, y, np.ones(len(y)))
+    assert abs(a - 0.5) < 0.05 and abs(c + 1.0) < 0.08
+    assert train_heads.auc(np.array([0.1, 0.2, 0.8, 0.9]), np.array([0, 0, 1, 1])) == 1.0
+    assert train_heads.auc(np.array([0.9, 0.8, 0.2, 0.1]), np.array([0, 0, 1, 1])) == 0.0
+
+
+def test_platt_survives_separable_scores():
+    # perfectly separated scores once overflowed the fit; it must stay finite
+    z = np.concatenate([np.full(500, -40.0), np.full(500, 40.0)])
+    y = np.concatenate([np.zeros(500), np.ones(500)]).astype(int)
+    a, c = train_heads.platt(z, y, np.ones(1000))
+    assert np.isfinite(a) and np.isfinite(c) and a > 0
+
+
+def test_the_library_s_own_heads_win_over_the_bundled_ones(tmp_path, monkeypatch):
+    bundled = heads_file(tmp_path / "bundled.npz")
+    own = tmp_path / "data" / "heads.npz"
+    monkeypatch.setattr(classifier, "HEADS_FILE", bundled)
+    monkeypatch.setattr(config, "CLASSIFIER_HEADS", str(own))
+    assert classifier.heads_path() == bundled  # none trained yet
+    own.parent.mkdir()
+    heads_file(own)
+    assert classifier.heads_path() == str(own)
+    clf = classifier.Classifier("unused", session=FakeSession())
+    assert clf.heads_file == str(own) and clf.heads is not None
+    monkeypatch.setattr(config, "CLASSIFIER_HEADS", "")
+    assert classifier.heads_path() == bundled
+
+
+def test_the_bundled_heads_load_and_answer_every_question():
+    h = classifier.Heads(classifier.HEADS_FILE)
+    assert {k: v[0] for k, v in h.q.items()} == {"label": "linear", "clutter": "net", "blur": "net"}
+    rng = np.random.default_rng(0)
+    v = rng.standard_normal(DIM).astype(np.float32)
+    out = h.verdicts(v / np.linalg.norm(v))
+    assert out["label"] in train_heads.LABELS
+    assert all(0.0 <= out[k] <= 1.0 for k in ("label_p", "clutter_p", "blur_p"))
+
+
+def test_a_network_head_must_answer_yes_or_no(tmp_path):
+    W = np.zeros((DIM, 5), np.float32)
+    common = dict(label_W=W, label_b=np.zeros(5, np.float32), label_scale=np.float32(1),
+                  label_classes=np.array(train_heads.LABELS),
+                  clutter_W1=np.zeros((DIM, 4), np.float32), clutter_b1=np.zeros(4, np.float32),
+                  clutter_w2=np.zeros(4, np.float32), clutter_b2=np.float32(0), clutter_gain=np.float32(8),
+                  clutter_a=np.float32(1), clutter_c=np.float32(2))
+    np.savez(tmp_path / "ok.npz", clutter_classes=np.array(["keeper", "clutter"]), **common)
+    h = classifier.Heads(str(tmp_path / "ok.npz"))
+    assert abs(h.verdicts(np.zeros(DIM, np.float32))["clutter_p"] - float(classifier.sigmoid(2.0))) < 1e-6
+    np.savez(tmp_path / "bad.npz", clutter_classes=np.array(["a", "b", "c"]), **common)
+    with pytest.raises(ValueError):
+        classifier.Heads(str(tmp_path / "bad.npz"))
 
 
 def test_train_heads_refuses_an_empty_library(tmp_path):

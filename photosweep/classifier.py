@@ -1,11 +1,11 @@
 """Stage 2: a small image classifier that runs on the CPU.
 
 SigLIP B/16 (int8, through onnxruntime) turns a thumbnail into a 768-number
-embedding; three small trained layers ("heads", heads/siglip-b16.npz) read the
-label, the clutter question and the blur question off it. Measured on a
-37,000-picture library against qwen3-vl's calls (cross-validated): 95% of
-labels agree, and 1.6% of real photos are called something else at p >= 0.9.
-About 0.1-0.3 s a picture on one CPU core, all three questions together.
+embedding; three small trained heads (heads/siglip-b16.npz) read the label,
+the clutter question and the blur question off it: a linear layer for the
+label, a one-hidden-layer network for each yes/no question, every probability
+calibrated on held-out pictures. Measured figures are in the README. About
+0.1-0.3 s a picture on one CPU core, all three questions together.
 
 The scanner stores every embedding, so the heads can be retrained from a
 library's own labels and from what its owner kept and deleted
@@ -49,30 +49,61 @@ def unpack(blob):
     return np.frombuffer(blob, dtype=np.float16).astype(np.float32)
 
 
+def heads_path():
+    """This library's own heads when they exist (CLASSIFIER_HEADS, in the data
+    volume, so they survive an image update), else the bundled ones."""
+    own = config.CLASSIFIER_HEADS
+    return own if own and os.path.isfile(own) else HEADS_FILE
+
+
 def softmax(z):
     z = z - z.max(-1, keepdims=True)
     e = np.exp(z)
     return e / e.sum(-1, keepdims=True)
 
 
+def sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-np.clip(z, -50.0, 50.0)))
+
+
+def hidden(emb, W1, b1, w2, b2, gain):
+    """The yes/no network's raw score: one ReLU layer, then a single output."""
+    return np.maximum(emb @ W1 * gain + b1, 0.0) @ w2 + b2
+
+
 class Heads:
-    """The trained layers: for each question, weights W (DIM x k), bias b,
-    a calibrated scale, and the class names."""
+    """The trained heads. Each question is one of two shapes:
+    linear:  {q}_W (DIM x k), {q}_b, {q}_scale, softmax over k classes;
+    network: {q}_W1, {q}_b1, {q}_w2, {q}_b2, {q}_gain, then the calibration
+             p(yes) = sigmoid({q}_a * score + {q}_c); exactly two classes.
+    Both carry {q}_classes."""
 
     def __init__(self, path):
         with np.load(path, allow_pickle=False) as z:
             self.q = {}
             for name in QUESTIONS:
-                if f"{name}_W" not in z:
-                    continue
-                self.q[name] = (z[f"{name}_W"].astype(np.float32), z[f"{name}_b"].astype(np.float32),
-                                float(z[f"{name}_scale"]), [str(c) for c in z[f"{name}_classes"]])
+                if f"{name}_W1" in z:
+                    W1, b1, w2 = (z[f"{name}_{k}"].astype(np.float32) for k in ("W1", "b1", "w2"))
+                    self.q[name] = ("net", (W1, b1, w2, float(z[f"{name}_b2"]), float(z[f"{name}_gain"])),
+                                    (float(z[f"{name}_a"]), float(z[f"{name}_c"])),
+                                    [str(c) for c in z[f"{name}_classes"]])
+                elif f"{name}_W" in z:
+                    self.q[name] = ("linear", (z[f"{name}_W"].astype(np.float32), z[f"{name}_b"].astype(np.float32)),
+                                    float(z[f"{name}_scale"]), [str(c) for c in z[f"{name}_classes"]])
         if "label" not in self.q:
             raise ValueError("heads file has no label head")
+        for name, (kind, _, _, classes) in self.q.items():
+            if kind == "net" and len(classes) != 2:
+                raise ValueError(f"{name}: a network head answers yes or no")
 
     def probs(self, name, emb):
-        W, b, scale, classes = self.q[name]
-        return classes, softmax((emb @ W) * scale + b)
+        kind, weights, cal, classes = self.q[name]
+        if kind == "linear":
+            W, b = weights
+            return classes, softmax((emb @ W) * cal + b)
+        a, c = cal
+        p = float(sigmoid(a * hidden(emb, *weights) + c))
+        return classes, np.array([1.0 - p, p], np.float32)
 
     def verdicts(self, emb):
         """{label, label_p, clutter_p, blur_p}: the likeliest label and its
@@ -89,7 +120,7 @@ class Heads:
 
 
 class Classifier:
-    def __init__(self, model_path, heads_path=HEADS_FILE, session=None):
+    def __init__(self, model_path, heads=None, session=None):
         if session is None:
             import onnxruntime as ort  # imported here: the web process never needs it
             so = ort.SessionOptions()
@@ -100,7 +131,9 @@ class Classifier:
         self.session = session
         outs = [o.name for o in session.get_outputs()]
         self._out = outs.index("pooler_output") if "pooler_output" in outs else 0
-        self.heads = Heads(heads_path) if heads_path and os.path.exists(heads_path) else None
+        heads = heads or heads_path()
+        self.heads_file = heads if os.path.isfile(heads) else None
+        self.heads = Heads(heads) if self.heads_file else None
 
     def embed(self, img):
         """A unit-length embedding of one picture. Thread-safe: onnxruntime
@@ -123,7 +156,7 @@ def enabled():
 
 def sorting():
     """The classifier can sort (model and heads both present)."""
-    return enabled() and os.path.isfile(HEADS_FILE)
+    return enabled() and os.path.isfile(heads_path())
 
 
 def load():
@@ -137,7 +170,7 @@ def load():
             try:
                 _loaded = Classifier(config.CLASSIFIER_MODEL)
                 log.info("image classifier loaded model=%s heads=%s", config.CLASSIFIER_MODEL,
-                         "yes" if _loaded.heads else "none (embeddings only)")
+                         _loaded.heads_file or "none (embeddings only)")
             except Exception as exc:
                 _failed = True
                 log.error("image classifier failed to load err=%s", f"{type(exc).__name__}: {exc}")
