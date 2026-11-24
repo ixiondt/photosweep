@@ -2,6 +2,7 @@
 so config (read at import) picks up each test's environment."""
 import importlib
 import json
+import os
 import sys
 
 import pytest
@@ -119,6 +120,17 @@ def test_security_headers(client):
     assert r.headers["X-Frame-Options"] == "DENY"
     assert "default-src 'none'" in r.headers["Content-Security-Policy"]
     assert r.headers["Cache-Control"] == "no-store"
+
+
+def test_pages_declare_an_icon_that_is_served(client):
+    # without the link the browser asks for /favicon.ico and logs a 404 on every visit
+    link = '<link rel="icon" href="/static/icon.svg"'
+    assert link in client.get("/", headers=who()).text
+    static = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "photosweep", "static")
+    with open(os.path.join(static, "login.html"), encoding="utf-8") as f:
+        assert link in f.read()  # the password-mode sign-in page, not served in header mode
+    r = client.get("/static/icon.svg")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml")
 
 
 @pytest.mark.parametrize("drop", ["Origin", "X-Photosweep"])
