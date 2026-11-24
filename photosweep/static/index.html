@@ -48,6 +48,12 @@
         <button type="button" data-source="nocamera" aria-pressed="false">No camera</button>
         <button type="button" data-source="messaging" aria-pressed="false">Messaging</button>
       </div>
+      <div class="seg" role="group" aria-label="Exposure" id="exposure-seg" hidden>
+        <button type="button" data-exposure="all" aria-pressed="true">Any</button>
+        <button type="button" data-exposure="dark" aria-pressed="false" title="Under-exposed: mostly black or very dim">Dark</button>
+        <button type="button" data-exposure="bright" aria-pressed="false" title="Over-exposed: washed out or blown to white">Bright</button>
+        <button type="button" data-exposure="normal" aria-pressed="false">Normal</button>
+      </div>
       <div class="seg" role="group" aria-label="Picture size" id="size-seg">
         <button type="button" data-size="s" aria-pressed="false">Small</button>
         <button type="button" data-size="m" aria-pressed="true">Medium</button>

@@ -371,6 +371,7 @@ def test_model_none_fingerprints_everything_and_finds_duplicates(lib, monkeypatc
     assert not asked  # no model was ever asked
     pics = {k: v for k, v in got.items() if k != "broken.jpg"}
     assert all(r["status"] == "pending" and r["dhash"] and r["sharpness"] is not None
+               and r["luma"] is not None and r["luma_dark"] is not None and r["luma_bright"] is not None
                and r["width"] == 64 and r["category"] is None for r in pics.values())
     assert all(os.path.exists(scanner.thumb_path(r["id"])) for r in pics.values())
     assert got["broken.jpg"]["status"] == "error"  # unreadable, parked as before

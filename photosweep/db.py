@@ -160,6 +160,11 @@ _ADDED = [
     # on answers from before the columns existed.
     ("clutter_at", "TEXT"),
     ("blur_at", "TEXT"),
+    # imaging.exposure() of the thumbnail: average grey 0-255, and the shares
+    # 0-1 crushed to black and blown to white. NULL = not measured yet.
+    ("luma", "REAL"),
+    ("luma_dark", "REAL"),
+    ("luma_bright", "REAL"),
 ]
 
 

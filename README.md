@@ -182,6 +182,7 @@ Edit `.env`:
 | `DUP_EMBED` | How alike two pictures' embeddings must be to show as look-alikes in Similar (default `0.96`; `0` turns it off) |
 | `DUP_MIRROR` | How close, in bits, a picture must be to another's flipped hash to be called its mirrored copy (default `24`) |
 | `CLASSIFIER_TRUST` | How sure the classifier must be to settle a question when a vision model is also set (default `0.95`). Lower sends fewer pictures to the model |
+| `EXPOSE_DARK_MEAN`, `EXPOSE_DARK_SHARE`, `EXPOSE_BRIGHT_MEAN`, `EXPOSE_BRIGHT_SHARE` | Where Blurry's Dark and Bright filters cut: an average grey (0-255) under `50` or at least `0.5` of the picture crushed to black is Dark; over `190` or `0.25` blown to white is Bright. Measured from the thumbnail, no model |
 | `AUTO_RETRAIN` | `1` (default) lets the scanner retrain the classifier on your own answers when idle, keeping the new heads only if they test better; `0` turns it off. `RETRAIN_MIN_NEW` (default `200`) and `RETRAIN_EVERY_S` (default one day) pace it |
 
 Start it, set a password, and open `http://127.0.0.1:8087`:

@@ -46,6 +46,13 @@ CLASSIFIER_TRUST = float(_env("CLASSIFIER_TRUST", "0.95"))
 # Heads trained on this library (python -m photosweep.train_heads writes here);
 # used when present, else the heads bundled with the code.
 CLASSIFIER_HEADS = _env("CLASSIFIER_HEADS", os.path.join(DATA_DIR, "heads.npz"))
+# Blurry's exposure filter (exposure.py): too dark is an average grey under
+# EXPOSE_DARK_MEAN (0-255) or at least EXPOSE_DARK_SHARE of the picture crushed
+# to black; too bright, over EXPOSE_BRIGHT_MEAN or EXPOSE_BRIGHT_SHARE blown.
+EXPOSE_DARK_MEAN = float(_env("EXPOSE_DARK_MEAN", "50"))
+EXPOSE_DARK_SHARE = float(_env("EXPOSE_DARK_SHARE", "0.5"))
+EXPOSE_BRIGHT_MEAN = float(_env("EXPOSE_BRIGHT_MEAN", "190"))
+EXPOSE_BRIGHT_SHARE = float(_env("EXPOSE_BRIGHT_SHARE", "0.25"))
 # Automatic retraining (retrain.py): when the scanner is idle, at most once per
 # RETRAIN_EVERY_S, and only once RETRAIN_MIN_NEW new answers (the owner's keeps
 # and deletes, the vision model's labels) have arrived since the heads in use

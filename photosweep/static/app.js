@@ -8,7 +8,7 @@ const TABS = [
   { key: "junk", label: "Junk", note: "Black frames, pocket shots and photos too blurred to make out." },
   { key: "clutter", label: "Clutter", note: "Photos the model, asked separately about each one, says nobody would miss: floors and walls, dark or accidental frames, random objects, scraps of paper, empty car parks. Surest first. People and pets should not be here, so look before deleting, and Keep anything it got wrong." },
   { key: "photo", label: "Photos", note: "What the model thinks is a real photo, least certain first: those are the ones it may have got wrong. Blurry ones are under Blurry and clutter under Clutter instead." },
-  { key: "blurry", label: "Blurry", note: "Shaken, out-of-focus or smeared photos. The model is asked about each photo separately; its surest calls come first. Photos it has not looked at yet are judged by a pixel score until it does, and that score mistakes smooth skin, sky and plain walls for blur. Look before deleting." },
+  { key: "blurry", label: "Blurry", note: "Shaken, out-of-focus or smeared photos. The model is asked about each photo separately; its surest calls come first. Photos it has not looked at yet are judged by a pixel score until it does, and that score mistakes smooth skin, sky and plain walls for blur. Dark and Bright pick out the under- and over-exposed ones. Look before deleting." },
   { key: "dupes", label: "Duplicates", note: "The same picture in more than one file: a WhatsApp copy next to its original, a HEIC next to its JPEG, an IMG_0205_1 re-import. Found by what the picture shows, not by name or bytes. Each group puts its best copy first (most pixels, then a camera in the EXIF, then the larger file), and Select all extras picks every other copy in every Same group, loaded or not. Similar is burst shots and near-repeats: different photos, so there is no bulk select there; pick the ones to go by hand. The one exception is Mirrored only, where Select all mirrored copies picks just the flipped copies." },
   { key: "kept", label: "Kept", note: "Images you marked to keep. They never come back into the other tabs." },
   { key: "error", label: "Errors", note: "Files the scan could not read or label after three tries. Recheck tries again; an empty (0-byte) or garbage file will only fail again, so Delete those." },
@@ -34,6 +34,14 @@ const POLL_MS = 15000;
 const DELETE_CHUNK = 500;
 
 const $ = (id) => document.getElementById(id);
+// Blurry only: many photos read as blurred because they are under- or
+// over-exposed. Measured from the thumbnail's grey levels (exposure.py).
+const EXPOSURES = [
+  { key: "all", label: "Any" },
+  { key: "dark", label: "Dark" },
+  { key: "bright", label: "Bright" },
+  { key: "normal", label: "Normal" },
+];
 const SOURCES = [
   { key: "all", label: "All" },
   { key: "camera", label: "Camera" },
@@ -42,7 +50,7 @@ const SOURCES = [
 ];
 
 const state = {
-  tab: "screenshot", minConf: 0, source: "all", tier: "same", mirrored: false, groups: 0, bulk: false, items: [], total: 0, loading: false, done: false,
+  tab: "screenshot", minConf: 0, source: "all", exposure: "all", tier: "same", mirrored: false, groups: 0, bulk: false, items: [], total: 0, loading: false, done: false,
   selected: new Set(), anchor: null, summary: null, viewerIndex: -1, gen: 0,
 };
 
@@ -215,6 +223,7 @@ function switchTab(key) {
   $("tab-note").textContent = t.note + " Click to select, Shift-click for a range.";
   $("conf-seg").hidden = !usesConfidence(key);
   $("source-seg").hidden = key === "error" || key === "dupes";
+  $("exposure-seg").hidden = key !== "blurry";
   $("tier-seg").hidden = key !== "dupes";
   syncDupControls();
   $("grid").classList.toggle("grid-groups", key === "dupes");
@@ -274,6 +283,14 @@ function renderTiers(counts) {
   }
 }
 
+function renderExposures(counts) {
+  for (const b of document.querySelectorAll("#exposure-seg button")) {
+    const ex = EXPOSURES.find((x) => x.key === b.dataset.exposure);
+    b.textContent = counts ? `${ex.label} ${fmt(counts[ex.key] || 0)}` : ex.label;
+    b.setAttribute("aria-pressed", String(ex.key === state.exposure));
+  }
+}
+
 function renderSources(counts) {
   for (const b of document.querySelectorAll("#source-seg button")) {
     const src = SOURCES.find((x) => x.key === b.dataset.source);
@@ -311,13 +328,15 @@ async function loadMore() {
     if (state.tab === "dupes") { await loadGroups(gen); return; }
     const minConf = usesConfidence(state.tab) ? state.minConf : 0;
     const source = state.tab === "error" ? "all" : state.source;
-    const q = new URLSearchParams({ tab: state.tab, min_conf: minConf, source, offset: state.items.length, limit: PAGE });
+    const exposure = state.tab === "blurry" ? state.exposure : "all";
+    const q = new URLSearchParams({ tab: state.tab, min_conf: minConf, source, exposure, offset: state.items.length, limit: PAGE });
     const data = await api(`/api/items?${q}`);
     if (gen !== state.gen) return; // a tab switch superseded this page
     const start = state.items.length;
     state.items.push(...data.items);
     state.total = data.total;
     renderSources(data.sources);
+    if (state.tab === "blurry") renderExposures(data.exposures);
     state.done = state.items.length >= data.total || data.items.length === 0;
     const frag = document.createDocumentFragment();
     data.items.forEach((item, k) => frag.append(tile(item, start + k)));
@@ -418,6 +437,8 @@ function renderEmpty() {
     ? "Select images in another tab and press Keep to hide them from the sweep for good."
     : state.minConf > 0 && usesConfidence(state.tab)
       ? "Nothing reaches that confidence. Try Any."
+      : state.tab === "blurry" && state.exposure !== "all"
+        ? "No blurry photos like that. Try Any."
       : state.source !== "all" && state.tab !== "error"
         ? "Nothing from that source in this tab. Try All."
       : scanning ? "The scan is still running; new images appear here as they are labelled." : "The scan found nothing of this kind.";
@@ -813,6 +834,14 @@ function boot() {
   for (const b of document.querySelectorAll("#size-seg button")) b.addEventListener("click", () => setSize(b.dataset.size));
   renderTabs();
   renderSources(null);
+  renderExposures(null);
+  for (const b of document.querySelectorAll("#exposure-seg button")) {
+    b.addEventListener("click", () => {
+      state.exposure = b.dataset.exposure;
+      renderExposures(null);
+      resetGrid();
+    });
+  }
   for (const b of document.querySelectorAll("#source-seg button")) {
     b.addEventListener("click", () => {
       state.source = b.dataset.source;

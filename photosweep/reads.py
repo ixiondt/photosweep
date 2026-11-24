@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 from . import classifier, config, db, dupes, imaging, remote
+from . import exposure as _exposure
 from .gate import conn, operator
 from .scanner import thumb_path
 
@@ -26,7 +27,7 @@ PAGE_MAX = 200
 GROUP_PAGE_MAX = 60
 ITEM_COLS = ("id, rel, category, confidence, reason, camera, width, height, name_hint, mtime, error, "
              "sharpness, blurry, blur_conf, blur_recheck, clutter, clutter_conf, clutter_reason, clutter_recheck, "
-             "size, kept, label_src, clutter_src, blur_src")
+             "size, kept, label_src, clutter_src, blur_src, luma, luma_dark, luma_bright")
 
 
 # ---------------------------------------------------------------- read ----
@@ -135,12 +136,15 @@ def summary(request: Request):
 
 @router.get("/api/items")
 def items(request: Request, tab: str = "screenshot", min_conf: int = 0, offset: int = 0, limit: int = 120,
-          source: str = "all"):
+          source: str = "all", exposure: str = "all"):
     operator(request)
     if tab not in TABS:
         raise HTTPException(status_code=400, detail="unknown tab")
     if source not in SOURCES:
         raise HTTPException(status_code=400, detail="unknown source")
+    expose = _exposure.filters()
+    if exposure not in expose:
+        raise HTTPException(status_code=400, detail="unknown exposure")
     limit = max(1, min(int(limit), PAGE_MAX))
     offset = max(0, int(offset))
     min_conf = max(0, min(int(min_conf), 100))
@@ -160,14 +164,21 @@ def items(request: Request, tab: str = "screenshot", min_conf: int = 0, offset: 
     # wrong, and the confident end of that tab is the library you are keeping.
     order = {"kept": "rel", "error": "rel", "photo": "confidence ASC, rel", "blurry": BLURRY_ORDER,
              "clutter": "clutter_conf DESC, rel"}.get(tab, "confidence DESC, rel")
-    # how many of this tab each source filter would leave, for the filter's labels
-    n = conn().execute(
-        f"SELECT count(*), count(camera), sum(name_hint = 'messaging') FROM files WHERE {where}", args).fetchone()
+    # How many of this tab each choice of one filter would leave, given the
+    # other, for the filters' labels; the total is the source count with both.
+    ex_where, ex_args = expose[exposure]
+    n = conn().execute(f"SELECT count(*), count(camera), sum(name_hint = 'messaging') FROM files "
+                       f"WHERE {where} AND {ex_where}", [*args, *ex_args]).fetchone()
     sources = {"all": n[0], "camera": n[1], "nocamera": n[0] - n[1], "messaging": n[2] or 0}
-    where = f"{where} AND {SOURCES[source]}"
+    cols, col_args = _exposure.count_sql()
+    e = conn().execute(f"SELECT {cols} FROM files WHERE {where} AND {SOURCES[source]}",
+                       [*col_args, *args]).fetchone()
+    exposures = {"all": e[0], "dark": e[1], "bright": e[2], "normal": e[0] - e[1] - e[2]}
+    where = f"{where} AND {SOURCES[source]} AND {ex_where}"
     rows = conn().execute(f"SELECT {ITEM_COLS} FROM files WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
-                          [*args, limit, offset]).fetchall()
-    return {"items": [dict(r) for r in rows], "total": sources[source], "offset": offset, "sources": sources}
+                          [*args, *ex_args, limit, offset]).fetchall()
+    return {"items": [dict(r) for r in rows], "total": sources[source], "offset": offset, "sources": sources,
+            "exposures": exposures}
 
 
 @router.get("/api/dupes")

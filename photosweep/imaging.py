@@ -122,6 +122,26 @@ def sharpness(img):
     return round(best / (sd * sd + 1) * 100, 2)
 
 
+EXPOSE_LO = 24   # a grey level at or under this is crushed shadow
+EXPOSE_HI = 240  # at or over this, blown highlight
+
+
+def exposure(img):
+    """(mean, dark, bright): the picture's average grey level, 0-255, and the
+    share of it, 0-1, crushed to black (<= EXPOSE_LO) and blown to white
+    (>= EXPOSE_HI). From the grey histogram of the 256 px thumbnail, so a
+    millisecond or two; None for an empty picture. Computed from the stored
+    512 px thumbnail, like sharpness(), so the scanner and the backfill agree."""
+    g = img.convert("L")
+    g.thumbnail((256, 256), Image.Resampling.LANCZOS)
+    hist = g.histogram()
+    n = sum(hist)
+    if not n:
+        return None
+    mean = sum(i * c for i, c in enumerate(hist)) / n
+    return round(mean, 1), round(sum(hist[:EXPOSE_LO + 1]) / n, 4), round(sum(hist[EXPOSE_HI:]) / n, 4)
+
+
 def dhash(img, n=16):
     """A difference hash of what the picture shows, as n*n bits in hex: the
     image shrunk to (n+1) x n grey, one bit per pixel for "brighter than its
