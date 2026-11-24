@@ -113,6 +113,19 @@ def test_no_heads_means_embeddings_only(tmp_path):
     assert clf.heads is None and clf.verdicts(np.ones(DIM, np.float32)) is None
 
 
+def test_onnxruntime_telemetry_is_off_before_it_can_be_imported():
+    # a fresh interpreter: the variable must be set by importing photosweep's
+    # classifier alone, ahead of any onnxruntime import, which is when it starts
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY"}
+    out = subprocess.run([sys.executable, "-c", "import os, photosweep.classifier; "
+                          "print(os.environ.get('ORT_DISABLE_TELEMETRY'))"],
+                         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "1"
+
+
 def test_switched_off_or_missing_model_loads_nothing(tmp_path, monkeypatch):
     classifier.reset()
     monkeypatch.setattr(config, "CLASSIFIER", "siglip")
