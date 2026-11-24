@@ -150,7 +150,11 @@ def test_keep_then_audit(client):
     s = client.get("/api/summary", headers=who()).json()
     assert s["counts"]["kept"] == 1 and s["counts"]["screenshot"] == 0
     from photosweep import config, db
-    assert db.verify_audit(db.connect(config.DB_PATH)) == (True, None)
+    conn = db.connect(config.DB_PATH)
+    assert db.verify_audit(conn) == (True, None)
+    # dated, so the automatic retrain can tell a new keep from one its heads saw
+    kept_at = conn.execute("SELECT kept_at FROM files WHERE id=1").fetchone()[0]
+    assert kept_at and kept_at[:10] == db.now()[:10]
 
 
 def test_delete_without_nextcloud_is_409(client):

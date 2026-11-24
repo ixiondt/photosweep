@@ -182,6 +182,8 @@ Edit `.env`:
 | `DUP_EMBED` | How alike two pictures' embeddings must be to show as look-alikes in Similar (default `0.96`; `0` turns it off) |
 | `DUP_MIRROR` | How close, in bits, a picture must be to another's flipped hash to be called its mirrored copy (default `24`) |
 | `CLASSIFIER_TRUST` | How sure the classifier must be to settle a question when a vision model is also set (default `0.95`). Lower sends fewer pictures to the model |
+| `EXPOSE_DARK_MEAN`, `EXPOSE_DARK_SHARE`, `EXPOSE_BRIGHT_MEAN`, `EXPOSE_BRIGHT_SHARE` | Where Blurry's Dark and Bright filters cut: an average grey (0-255) under `50` or at least `0.5` of the picture crushed to black is Dark; over `190` or `0.25` blown to white is Bright. Measured from the thumbnail, no model |
+| `AUTO_RETRAIN` | `1` (default) lets the scanner retrain the classifier on your own answers when idle, keeping the new heads only if they test better; `0` turns it off. `RETRAIN_MIN_NEW` (default `200`) and `RETRAIN_EVERY_S` (default one day) pace it |
 
 Start it, set a password, and open `http://127.0.0.1:8087`:
 
@@ -377,6 +379,22 @@ It prints the same out-of-fold figures as above, as counts only. Heads in
 `/data/heads.npz` (or `CLASSIFIER_HEADS`) are used in place of the bundled ones
 and survive image updates; delete the file to go back. Training took under two
 minutes for 37,500 pictures on two cores.
+
+**It also retrains itself.** When the scanner has nothing to do, at most once a
+day, and once 200 new answers have come in since the heads in use were trained
+(your keeps, your deletes of clutter, the vision model's answers), it trains new
+heads at low priority and tests them against the old **on those new answers
+only**, which the old heads cannot have learned from. The new heads must be no
+worse on each question with at least 100 new answers, and must not file more
+of your new keeps as clutter at `CLASSIFIER_TRUST` than the old would. If they
+pass they replace the old, which are kept as `/data/heads.npz.prev.npz`;
+otherwise nothing changes and the next try judges on more. Each answer is
+dated by its own question, so a re-asked clutter question never makes an old
+blur answer look new. The first time it runs it only notes the time, since the
+heads in use may have been trained on everything already there. Each try is
+logged, and the latest is kept in the `retrain_last` setting. To roll back,
+copy the `.prev.npz` over `heads.npz` and restart the scanner. `AUTO_RETRAIN=0`
+turns it off.
 
 **What the bundled heads hold.** Only weights: 1.6 MB of numbers learned from
 the author's library. No picture, thumbnail, embedding or file name is in

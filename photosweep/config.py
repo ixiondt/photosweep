@@ -46,6 +46,22 @@ CLASSIFIER_TRUST = float(_env("CLASSIFIER_TRUST", "0.95"))
 # Heads trained on this library (python -m photosweep.train_heads writes here);
 # used when present, else the heads bundled with the code.
 CLASSIFIER_HEADS = _env("CLASSIFIER_HEADS", os.path.join(DATA_DIR, "heads.npz"))
+# Blurry's exposure filter (exposure.py): too dark is an average grey under
+# EXPOSE_DARK_MEAN (0-255) or at least EXPOSE_DARK_SHARE of the picture crushed
+# to black; too bright, over EXPOSE_BRIGHT_MEAN or EXPOSE_BRIGHT_SHARE blown.
+EXPOSE_DARK_MEAN = float(_env("EXPOSE_DARK_MEAN", "50"))
+EXPOSE_DARK_SHARE = float(_env("EXPOSE_DARK_SHARE", "0.5"))
+EXPOSE_BRIGHT_MEAN = float(_env("EXPOSE_BRIGHT_MEAN", "190"))
+EXPOSE_BRIGHT_SHARE = float(_env("EXPOSE_BRIGHT_SHARE", "0.25"))
+# Automatic retraining (retrain.py): when the scanner is idle, at most once per
+# RETRAIN_EVERY_S, and only once RETRAIN_MIN_NEW new answers (the owner's keeps
+# and deletes, the vision model's labels) have arrived since the heads in use
+# were trained. New heads replace the old only if they beat them on those new
+# answers; the old are kept beside them as <heads>.prev.npz. "0" turns it off.
+AUTO_RETRAIN = _env("AUTO_RETRAIN", "1").strip() != "0"
+RETRAIN_MIN_NEW = int(_env("RETRAIN_MIN_NEW", "200"))
+RETRAIN_EVERY_S = int(_env("RETRAIN_EVERY_S", str(24 * 3600)))
+RETRAIN_TIMEOUT_S = int(_env("RETRAIN_TIMEOUT_S", "3600"))
 MODEL_TIMEOUT_S = float(_env("MODEL_TIMEOUT_S", "180"))
 # openai only: how the JSON answer is asked for. "schema" (structured output),
 # "object" (JSON mode) or "none" (the prompt alone), for services that refuse one.

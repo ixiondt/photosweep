@@ -126,6 +126,16 @@ class Heads:
             out[f"{name}_p"] = p
         return out
 
+    def full(self, name, X):
+        """(classes, P): every class's probability for each row of X, for one
+        question. train_heads scores the heads in use with it."""
+        X = np.asarray(X, np.float32)
+        kind, weights, cal, classes = self.q[name]
+        if kind == "linear":
+            return classes, softmax((X @ weights[0]) * cal + weights[1])
+        p = sigmoid(cal[0] * hidden(X, *weights) + cal[1])
+        return classes, np.stack([1.0 - p, p], 1)
+
     def verdicts(self, emb):
         """{label, label_p, clutter_p, blur_p}: the likeliest label and its
         probability, and the probability of clutter and of blur (None when
@@ -196,6 +206,19 @@ def load():
                 _failed = True
                 log.error("image classifier failed to load err=%s", f"{type(exc).__name__}: {exc}")
     return _loaded
+
+
+def reload_heads():
+    """Point the loaded classifier at heads_path() again, after the automatic
+    retrain replaced the heads file; the image model stays loaded. Raises if
+    the new file will not load, leaving the old heads in use."""
+    with _lock:
+        if _loaded is None:
+            return
+        path = heads_path()
+        heads = Heads(path) if os.path.isfile(path) else None
+        _loaded.heads, _loaded.heads_file = heads, path if heads else None
+    log.info("image classifier heads reloaded heads=%s", path)
 
 
 def reset():

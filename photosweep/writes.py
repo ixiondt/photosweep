@@ -26,7 +26,8 @@ async def keep(request: Request):
     marks = ",".join("?" * len(ids))
     with db.immediate(c):
         # a fingerprinted file not yet labelled (or never, with MODEL=none) can be kept too
-        n = c.execute(f"UPDATE files SET kept=? WHERE {db.LIVE} AND id IN ({marks})", [flag, *ids]).rowcount
+        n = c.execute(f"UPDATE files SET kept=?, kept_at=? WHERE {db.LIVE} AND id IN ({marks})",
+                      [flag, db.now(), *ids]).rowcount
         db.audit(c, who, "keep" if flag else "unkeep", {"ids": ids, "n": n})
     return {"updated": n}
 

@@ -150,6 +150,21 @@ _ADDED = [
     # when the vision model last answered a blur or clutter question for this
     # row (UTC, the scanned_at format): the status line's pace for re-asks
     ("asked_at", "TEXT"),
+    # when the owner last pressed Keep or Unkeep on this row: lets the
+    # automatic retrain (retrain.py) tell decisions its heads have seen from
+    # ones they have not. NULL on rows kept before the column existed.
+    ("kept_at", "TEXT"),
+    # when the vision model last answered the clutter / the blur question for
+    # this row. asked_at covers both, so a clutter re-ask would make an old
+    # blur answer look new; the retrain needs each question's own date. NULL
+    # on answers from before the columns existed.
+    ("clutter_at", "TEXT"),
+    ("blur_at", "TEXT"),
+    # imaging.exposure() of the thumbnail: average grey 0-255, and the shares
+    # 0-1 crushed to black and blown to white. NULL = not measured yet.
+    ("luma", "REAL"),
+    ("luma_dark", "REAL"),
+    ("luma_bright", "REAL"),
 ]
 
 

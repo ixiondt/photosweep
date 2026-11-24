@@ -23,12 +23,14 @@ blur heads are one-hidden-layer networks with Platt calibration: on one
 over a linear head, with duplicate-grouped folds.
 """
 import argparse
+import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 
 import numpy as np
 
-from . import classifier, config
+from . import classifier, config, heads_gate
 
 LABELS = ["screenshot", "meme", "document", "junk", "photo"]
 SCALE = 30.0      # logits = (x @ W) * scale + b, on unit-length x
@@ -166,9 +168,13 @@ def load(db_path):
     running scanner cannot change the set halfway."""
     c = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     c.row_factory = sqlite3.Row
+    # Read-only, so a database the current code has not yet opened (and so not
+    # yet migrated, db._ADDED) may lack the newest columns: read those as NULL.
+    have = {r["name"] for r in c.execute("PRAGMA table_info(files)")}
+    dates = ", ".join(k if k in have else f"NULL AS {k}" for k in ("scanned_at", "deleted_at", "kept_at", "clutter_at", "blur_at"))
     rows = c.execute(
         "SELECT id, status, category, clutter, blurry, kept, label_src, clutter_src, blur_src, "
-        "clutter_recheck, blur_recheck, embedding FROM files "
+        f"clutter_recheck, blur_recheck, {dates}, embedding FROM files "
         "WHERE embedding IS NOT NULL AND length(embedding) = ? AND status IN ('done','deleted') "
         "AND category IS NOT NULL", (classifier.DIM * 2,)).fetchall()
     X = np.stack([classifier.unpack(r["embedding"]) for r in rows]) if rows else np.zeros((0, classifier.DIM))
@@ -246,9 +252,12 @@ def report(name, classes, rows, idx, y, P):
                   f"deleted clutter flagged {(deleted & (P[:, 1] >= t)).sum()} of {deleted.sum()}")
 
 
-def train(rows, X, fold):
-    """{array name: array} for the heads file, printing the out-of-fold report."""
+def train(rows, X, fold, oof=None):
+    """{array name: array} for the heads file, printing the out-of-fold report.
+    Given a dict as oof, fills it with each question's (row index, target,
+    weight, classes, out-of-fold probabilities) for heads_gate."""
     out = {}
+    oof = {} if oof is None else oof
     for name, classes, idx, y, w in sets(rows):
         if len(y) < 50 or len(set(y.tolist())) < len(classes):
             print(f"\n{name}: too few examples ({len(y)}), skipped")
@@ -257,7 +266,8 @@ def train(rows, X, fold):
         if name == "label":
             Z = out_of_fold(Xs, y, len(classes), w, fs)
             t = temperature(Z, y, w)
-            report(name, classes, rows, idx, y, classifier.softmax(Z * t))
+            oof[name] = (idx, y, w, classes, classifier.softmax(Z * t))
+            report(name, classes, rows, idx, y, oof[name][4])
             W, b = fit(Xs, y, len(classes), w)
             out.update({f"{name}_W": W, f"{name}_b": (b * t).astype(np.float32),
                         f"{name}_scale": np.float32(SCALE * t), f"{name}_classes": np.array(classes)})
@@ -266,7 +276,8 @@ def train(rows, X, fold):
         z = net_out_of_fold(Xs, y, w, fs)
         a, c = platt(z, y, w)
         p = classifier.sigmoid(a * z + c)
-        report(name, classes, rows, idx, y, np.stack([1 - p, p], 1))
+        oof[name] = (idx, y, w, classes, np.stack([1 - p, p], 1))
+        report(name, classes, rows, idx, y, oof[name][4])
         print(f"  AUC {auc(z, y):.3f}")
         P = fit_net(Xs, y, w)
         out.update({f"{name}_W1": P["W1"], f"{name}_b1": P["b1"], f"{name}_w2": P["w2"],
@@ -281,10 +292,20 @@ def main(argv=None):
     ap.add_argument("--db", default=config.DB_PATH)
     ap.add_argument("--out", default=config.CLASSIFIER_HEADS)
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
+    ap.add_argument("--gate", metavar="HEADS", help="judge the new heads against these (heads_gate); "
+                    "needs --fresh-since and --verdict")
+    ap.add_argument("--fresh-since", metavar="UTC", help="answers given after this are the fresh ones")
+    ap.add_argument("--trust", type=float, default=config.CLASSIFIER_TRUST)
+    ap.add_argument("--verdict", metavar="JSON", help="where the gate's verdict is written")
     args = ap.parse_args(argv)
+    if args.gate and not (args.fresh_since and args.verdict):
+        ap.error("--gate needs --fresh-since and --verdict")
+    # taken before the read: an answer given while this runs is fresh next time
+    read_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rows, X, fold = load(args.db)
     print(f"{len(rows)} labelled pictures with an embedding; folds keep duplicate groups together")
-    out = train(rows, X, fold)
+    oof = {}
+    out = train(rows, X, fold, oof)
     if "label_W" not in out:
         raise SystemExit("not enough labelled pictures to train the label head")
     if args.dry_run:
@@ -294,6 +315,15 @@ def main(argv=None):
     np.savez(tmp, **out)
     os.replace(tmp, args.out)
     print(f"\nwrote {args.out}")
+    if args.gate:
+        verdict = heads_gate.judge(rows, X, oof, args.gate, args.fresh_since, args.trust)
+        verdict["read_at"] = read_at
+        tmp = args.verdict + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(verdict, f)
+        os.replace(tmp, args.verdict)
+        print(f"gate: {'replace' if verdict['swap'] else 'keep the heads in use'}; "
+              + ("; ".join(verdict["reasons"]) or "every judged question passed"))
 
 
 if __name__ == "__main__":
