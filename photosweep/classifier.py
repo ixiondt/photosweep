@@ -20,6 +20,14 @@ from PIL import Image
 
 from . import config
 
+# onnxruntime starts Microsoft's telemetry (1DS, to mobile.events.data.microsoft.com)
+# when it is imported, on Linux too: its log says so on every start. This
+# variable stops it starting at all, so it must be set before the import below
+# (in Classifier) ever runs; disable_telemetry_events() there would come after.
+# The Dockerfile sets it as well. Verified on onnxruntime 1.32: with it set, the
+# telemetry line is gone and the model loads the same.
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
+
 log = logging.getLogger("photosweep.classifier")
 
 HEADS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heads", "siglip-b16.npz")
@@ -154,6 +162,7 @@ class Classifier:
     def __init__(self, model_path, heads=None, session=None):
         if session is None:
             import onnxruntime as ort  # imported here: the web process never needs it
+            ort.disable_telemetry_events()  # belt and braces, should the variable be overridden
             so = ort.SessionOptions()
             # one thread a run: the scanner already decodes FINGERPRINT_WORKERS pictures at once
             so.intra_op_num_threads = 1

@@ -8,7 +8,7 @@ page and delete what you choose. Every delete goes to Nextcloud's **Deleted
 files**, so it can be undone.
 
 Nothing leaves your network by default. There is no cloud service and no
-account. **No GPU is needed:** a small image classifier sorts the library on
+account, and the telemetry onnxruntime would otherwise start is switched off. **No GPU is needed:** a small image classifier sorts the library on
 the CPU, agreeing with the vision model on 98% of labels, and a vision model,
 when you have one, is asked only about the pictures the classifier is unsure
 of: [No GPU?](#no-gpu-the-cpu-classifier-duplicates-only-or-a-cloud-model).
