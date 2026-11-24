@@ -50,7 +50,7 @@ const SOURCES = [
 ];
 
 const state = {
-  tab: "screenshot", minConf: 0, source: "all", exposure: "all", tier: "same", mirrored: false, groups: 0, bulk: false, items: [], total: 0, loading: false, done: false,
+  tab: "screenshot", minConf: 0, source: "all", exposure: "all", year: "all", tier: "same", mirrored: false, groups: 0, bulk: false, items: [], total: 0, loading: false, done: false,
   selected: new Set(), anchor: null, summary: null, viewerIndex: -1, gen: 0,
 };
 
@@ -224,6 +224,7 @@ function switchTab(key) {
   $("conf-seg").hidden = !usesConfidence(key);
   $("source-seg").hidden = key === "error" || key === "dupes";
   $("exposure-seg").hidden = key !== "blurry";
+  $("year-pick").hidden = key === "error" || key === "dupes";
   $("tier-seg").hidden = key !== "dupes";
   syncDupControls();
   $("grid").classList.toggle("grid-groups", key === "dupes");
@@ -291,6 +292,26 @@ function renderExposures(counts) {
   }
 }
 
+// The year filter's choices, rebuilt from the first page's counts only: a
+// rebuild while scrolling would close the list under the pointer. A chosen
+// year with nothing in this tab stays listed, at 0, so the choice holds.
+function renderYears(counts) {
+  const sel = $("year-select");
+  const all = Object.values(counts).reduce((a, b) => a + b, 0);
+  const years = Object.keys(counts).filter((k) => k !== "none");
+  if (/^\d{4}$/.test(state.year) && !years.includes(state.year)) years.push(state.year);
+  years.sort((a, b) => b.localeCompare(a));
+  const opts = [["all", `All years · ${fmt(all)}`], ...years.map((y) => [y, `${y} · ${fmt(counts[y] || 0)}`])];
+  if (counts.none || state.year === "none") opts.push(["none", `No date · ${fmt(counts.none || 0)}`]);
+  sel.replaceChildren(...opts.map(([value, text]) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    return o;
+  }));
+  sel.value = state.year;
+}
+
 function renderSources(counts) {
   for (const b of document.querySelectorAll("#source-seg button")) {
     const src = SOURCES.find((x) => x.key === b.dataset.source);
@@ -329,7 +350,8 @@ async function loadMore() {
     const minConf = usesConfidence(state.tab) ? state.minConf : 0;
     const source = state.tab === "error" ? "all" : state.source;
     const exposure = state.tab === "blurry" ? state.exposure : "all";
-    const q = new URLSearchParams({ tab: state.tab, min_conf: minConf, source, exposure, offset: state.items.length, limit: PAGE });
+    const year = state.tab === "error" ? "all" : state.year;
+    const q = new URLSearchParams({ tab: state.tab, min_conf: minConf, source, exposure, year, offset: state.items.length, limit: PAGE });
     const data = await api(`/api/items?${q}`);
     if (gen !== state.gen) return; // a tab switch superseded this page
     const start = state.items.length;
@@ -337,6 +359,7 @@ async function loadMore() {
     state.total = data.total;
     renderSources(data.sources);
     if (state.tab === "blurry") renderExposures(data.exposures);
+    if (start === 0) renderYears(data.years);
     state.done = state.items.length >= data.total || data.items.length === 0;
     const frag = document.createDocumentFragment();
     data.items.forEach((item, k) => frag.append(tile(item, start + k)));
@@ -437,6 +460,8 @@ function renderEmpty() {
     ? "Select images in another tab and press Keep to hide them from the sweep for good."
     : state.minConf > 0 && usesConfidence(state.tab)
       ? "Nothing reaches that confidence. Try Any."
+      : state.year !== "all" && state.tab !== "error"
+        ? "Nothing from that year in this tab. Try All years."
       : state.tab === "blurry" && state.exposure !== "all"
         ? "No blurry photos like that. Try Any."
       : state.source !== "all" && state.tab !== "error"
@@ -835,6 +860,10 @@ function boot() {
   renderTabs();
   renderSources(null);
   renderExposures(null);
+  $("year-select").addEventListener("change", (e) => {
+    state.year = e.target.value;
+    resetGrid();
+  });
   for (const b of document.querySelectorAll("#exposure-seg button")) {
     b.addEventListener("click", () => {
       state.exposure = b.dataset.exposure;

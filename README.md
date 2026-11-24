@@ -51,6 +51,11 @@ in writing.
     *Mirrored only* shows just the groups holding one, and there *Select all
     mirrored copies* takes the flipped copies and nothing else, never a best
     copy, a Keep or a burst frame.
+- **Narrows a big tab.** Every tab but Duplicates filters by year, from a
+  folder named for the year (`2024/`), else a date in the file name, else the
+  EXIF capture date; and by source (camera, no camera, messaging apps). Blurry
+  also splits into Dark, Bright and Normal exposure. Each filter's counts are
+  within the others.
 - **Deletes safely.** The photo folder is mounted read-only. Deleting goes
   through Nextcloud's WebDAV API with an app password you can revoke, so files
   land in Deleted files and Nextcloud's index stays correct. Every action is
