@@ -29,7 +29,7 @@ import httpx
 import numpy as np
 from PIL import Image
 
-from . import classifier, classify, config, db, dupes, exposure, imaging, neardupes, remote, retrain
+from . import classifier, classify, config, db, dupes, exposure, imaging, neardupes, remote, retrain, years
 
 log = logging.getLogger("photosweep.scanner")
 _stop = False
@@ -130,7 +130,7 @@ def prepare(file_id, rel):
     """Decode one file and write its thumbnail. Touches no database, so it is
     safe on the prefetch thread while the model works on the previous image.
     Returns ("ok", thumb, camera, width, height, sharpness, dhash, embedding,
-    exposure columns),
+    exposure columns, year),
     ("gone",) or ("bad", message). The embedding is None when the image
     classifier is off or could not read this one."""
     full = os.path.realpath(os.path.join(config.PICS_ROOT, rel))
@@ -145,6 +145,7 @@ def prepare(file_id, rel):
             expo = exposure.columns(stored)
             dh = imaging.dhash(stored)
             emb = _embed(file_id, stored)
+        year = years.of_picture(rel, full)  # the path, else one more header read for EXIF
     except FileNotFoundError:
         return ("gone",)
     except Exception as exc:  # any decoder failure is this file's problem
@@ -155,7 +156,7 @@ def prepare(file_id, rel):
     with open(tmp, "wb") as f:
         f.write(thumb)
     os.replace(tmp, path)
-    return ("ok", thumb, camera, width, height, sharp, dh, emb, expo)
+    return ("ok", thumb, camera, width, height, sharp, dh, emb, expo, year)
 
 
 def _embed(file_id, img):
@@ -238,9 +239,9 @@ def record_fingerprint(conn, row, prepared):
     if prepared[0] == "bad":
         fail(conn, row["id"], prepared[1])
         return None
-    _, _thumb, camera, width, height, sharp, dh, emb, expo = prepared
+    _, _thumb, camera, width, height, sharp, dh, emb, expo, year = prepared
     sets = {"camera": camera, "width": width, "height": height, "name_hint": imaging.name_hint(row["rel"]),
-            "sharpness": sharp, "dhash": dh, "dup_linked": 0, "error": None, **expo}
+            "sharpness": sharp, "dhash": dh, "dup_linked": 0, "error": None, "year": year, **expo}
     sets.update(classifier_sets(emb, settle=True))
     cols = ", ".join(f"{k}=?" for k in sets)
     with db.immediate(conn):
@@ -608,6 +609,9 @@ def run(limit=None, sample=False, match=None):
     measured = exposure.backfill(conn, thumb_path, lambda: _stop)
     if measured:
         log.info("exposure backfill measured=%d", measured)
+    dated = years.backfill(conn, config.PICS_ROOT, lambda: _stop)
+    if dated:
+        log.info("year backfill dated=%d", dated)
     if limit is None:  # the service only; a timing run measures labelling
         _dupes(conn, backfill=True)
     if classifier.enabled():

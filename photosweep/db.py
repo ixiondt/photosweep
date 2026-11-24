@@ -165,6 +165,7 @@ _ADDED = [
     ("luma", "REAL"),
     ("luma_dark", "REAL"),
     ("luma_bright", "REAL"),
+    ("year", "INTEGER"),  # years.py: 0 = looked, no date; NULL = not yet
 ]
 
 

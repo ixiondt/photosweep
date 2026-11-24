@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, Response
 
 from . import classifier, config, db, dupes, imaging, remote
 from . import exposure as _exposure
+from . import years as _years
 from .gate import conn, operator
 from .scanner import thumb_path
 
@@ -136,7 +137,7 @@ def summary(request: Request):
 
 @router.get("/api/items")
 def items(request: Request, tab: str = "screenshot", min_conf: int = 0, offset: int = 0, limit: int = 120,
-          source: str = "all", exposure: str = "all"):
+          source: str = "all", exposure: str = "all", year: str = "all"):
     operator(request)
     if tab not in TABS:
         raise HTTPException(status_code=400, detail="unknown tab")
@@ -145,6 +146,10 @@ def items(request: Request, tab: str = "screenshot", min_conf: int = 0, offset: 
     expose = _exposure.filters()
     if exposure not in expose:
         raise HTTPException(status_code=400, detail="unknown exposure")
+    yr = _years.where(year)
+    if yr is None:
+        raise HTTPException(status_code=400, detail="unknown year")
+    yr_where, yr_args = yr
     limit = max(1, min(int(limit), PAGE_MAX))
     offset = max(0, int(offset))
     min_conf = max(0, min(int(min_conf), 100))
@@ -165,20 +170,21 @@ def items(request: Request, tab: str = "screenshot", min_conf: int = 0, offset: 
     order = {"kept": "rel", "error": "rel", "photo": "confidence ASC, rel", "blurry": BLURRY_ORDER,
              "clutter": "clutter_conf DESC, rel"}.get(tab, "confidence DESC, rel")
     # How many of this tab each choice of one filter would leave, given the
-    # other, for the filters' labels; the total is the source count with both.
+    # others, for the filters' labels; the total is the source count with all.
     ex_where, ex_args = expose[exposure]
     n = conn().execute(f"SELECT count(*), count(camera), sum(name_hint = 'messaging') FROM files "
-                       f"WHERE {where} AND {ex_where}", [*args, *ex_args]).fetchone()
+                       f"WHERE {where} AND {ex_where} AND {yr_where}", [*args, *ex_args, *yr_args]).fetchone()
     sources = {"all": n[0], "camera": n[1], "nocamera": n[0] - n[1], "messaging": n[2] or 0}
     cols, col_args = _exposure.count_sql()
-    e = conn().execute(f"SELECT {cols} FROM files WHERE {where} AND {SOURCES[source]}",
-                       [*col_args, *args]).fetchone()
+    e = conn().execute(f"SELECT {cols} FROM files WHERE {where} AND {SOURCES[source]} AND {yr_where}",
+                       [*col_args, *args, *yr_args]).fetchone()
     exposures = {"all": e[0], "dark": e[1], "bright": e[2], "normal": e[0] - e[1] - e[2]}
-    where = f"{where} AND {SOURCES[source]} AND {ex_where}"
+    years = _years.counts(conn(), f"{where} AND {SOURCES[source]} AND {ex_where}", [*args, *ex_args])
+    where = f"{where} AND {SOURCES[source]} AND {ex_where} AND {yr_where}"
     rows = conn().execute(f"SELECT {ITEM_COLS} FROM files WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
-                          [*args, *ex_args, limit, offset]).fetchall()
+                          [*args, *ex_args, *yr_args, limit, offset]).fetchall()
     return {"items": [dict(r) for r in rows], "total": sources[source], "offset": offset, "sources": sources,
-            "exposures": exposures}
+            "exposures": exposures, "years": years}
 
 
 @router.get("/api/dupes")

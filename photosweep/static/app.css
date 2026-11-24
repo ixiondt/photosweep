@@ -164,6 +164,10 @@ main:focus { outline: none; }
 /* same for buttons: Recheck showed on Kept and Duplicates, Keep on Errors (found 2026-11-21) */
 .btn[hidden], .tab[hidden] { display: none; }
 #source-seg button, #exposure-seg button, #tier-seg button { font-variant-numeric: tabular-nums; }
+/* the year filter: a native select, nineteen years would overflow a .seg row; sized to sit level with one */
+.pick[hidden] { display: none; }
+.pick select { min-height: 46px; padding: 0 8px 0 12px; border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface-sunken); color: var(--text); font: 600 var(--fs-sm)/1 var(--font); font-variant-numeric: tabular-nums; cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--surface-raised); border-color: var(--border); color: var(--text); }
 
 /* ------------------------------------------------------------ grid ---- */

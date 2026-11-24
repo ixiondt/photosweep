@@ -33,7 +33,7 @@ def rows(path):
 
 def test_prepare_writes_thumb_and_touches_no_db(lib):
     out = scanner.prepare(7, "2026/01/img1.jpg")
-    assert out[0] == "ok" and out[3:5] == (64, 48)
+    assert out[0] == "ok" and out[3:5] == (64, 48) and out[9] == 2026  # the year, from the folder
     with Image.open(scanner.thumb_path(7)) as im:  # scored from the thumbnail as stored
         assert out[5] == imaging.sharpness(im)
     assert os.path.exists(scanner.thumb_path(7))
@@ -372,6 +372,7 @@ def test_model_none_fingerprints_everything_and_finds_duplicates(lib, monkeypatc
     pics = {k: v for k, v in got.items() if k != "broken.jpg"}
     assert all(r["status"] == "pending" and r["dhash"] and r["sharpness"] is not None
                and r["luma"] is not None and r["luma_dark"] is not None and r["luma_bright"] is not None
+               and r["year"] == 2026  # every fixture sits under a 2026/ folder
                and r["width"] == 64 and r["category"] is None for r in pics.values())
     assert all(os.path.exists(scanner.thumb_path(r["id"])) for r in pics.values())
     assert got["broken.jpg"]["status"] == "error"  # unreadable, parked as before
