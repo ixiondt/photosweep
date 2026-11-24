@@ -29,7 +29,7 @@ import httpx
 import numpy as np
 from PIL import Image
 
-from . import classifier, classify, config, db, dupes, imaging, neardupes, remote
+from . import classifier, classify, config, db, dupes, imaging, neardupes, remote, retrain
 
 log = logging.getLogger("photosweep.scanner")
 _stop = False
@@ -432,9 +432,10 @@ def judge_one(conn, http, token, row):
             except classify.BadVerdict as exc:
                 log.warning("blur check: bad verdict id=%d sampled=%s err=%s", row["id"], sample, exc)
     with db.immediate(conn):
-        conn.execute("UPDATE files SET blurry=?, blur_conf=?, blur_recheck=0, blur_src='model', asked_at=? "
-                     "WHERE id=? AND (blurry IS NULL OR blur_recheck = 1)",
-                     (blurry, conf, _now(), row["id"]))
+        now = _now()
+        conn.execute("UPDATE files SET blurry=?, blur_conf=?, blur_recheck=0, blur_src='model', asked_at=?, "
+                     "blur_at=? WHERE id=? AND (blurry IS NULL OR blur_recheck = 1)",
+                     (blurry, conf, now, now, row["id"]))
     return blurry
 
 
@@ -492,10 +493,11 @@ def clutter_one(conn, http, token, row):
             except classify.BadVerdict as exc:
                 log.warning("clutter check: bad verdict id=%d sampled=%s err=%s", row["id"], sample, exc)
     with db.immediate(conn):
+        now = _now()
         conn.execute("UPDATE files SET clutter=?, clutter_conf=?, clutter_reason=?, clutter_recheck=0, "
-                     "clutter_src='model', asked_at=? "
+                     "clutter_src='model', asked_at=?, clutter_at=? "
                      "WHERE id=? AND (clutter IS NULL OR clutter_recheck = 1)",
-                     (verdict, conf, reason, _now(), row["id"]))
+                     (verdict, conf, reason, now, now, row["id"]))
     return verdict
 
 
@@ -563,6 +565,22 @@ def _back_off(exc, backoff):
     log.warning("router unavailable (%s); sleeping %.0fs", exc, wait)
     time.sleep(min(wait, 600))
     return min(backoff * 2, 300.0)
+
+
+def _retrain_if_due(conn):
+    """Retrain the heads when retrain.due() says so (idle time only), then load
+    and score with them if they replaced the old. True when it ran. Never
+    fatal: the heads in use carry on."""
+    try:
+        if not retrain.due(conn):
+            return False
+        if retrain.run(conn, lambda: _stop):
+            classifier.reload_heads()
+            rescore(conn)
+    except Exception as exc:
+        log.error("retrain failed err=%s", f"{type(exc).__name__}: {exc}")
+        return False
+    return True
 
 
 def _token():
@@ -692,6 +710,8 @@ def run(limit=None, sample=False, match=None):
                     _dupes(conn)  # files labelled since the last pass; a no-op when there are none
                     if next_side(conn) is not None:
                         side_due = True
+                        continue
+                    if _retrain_if_due(conn):
                         continue
                     time.sleep(60)  # idle until the next re-walk finds something
                     continue

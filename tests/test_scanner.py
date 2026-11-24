@@ -236,6 +236,9 @@ def test_recheck_reads_the_original_larger_and_jumps_the_queue(lib, monkeypatch)
     assert max(seen[0]) == config.RECHECK_PX
     got = conn.execute("SELECT blurry, blur_conf, blur_recheck FROM files WHERE id=?", (row["id"],)).fetchone()
     assert tuple(got) == (1, 77, 0) and scanner.next_blur(conn) is None
+    # each question dates its own answer, for the automatic retrain
+    at = conn.execute("SELECT asked_at, blur_at, clutter_at FROM files WHERE id=?", (row["id"],)).fetchone()
+    assert at["blur_at"] and at["blur_at"] == at["asked_at"] and at["clutter_at"] is None
 
 
 def test_migration_adds_sharpness_to_an_old_database(tmp_path):
@@ -293,6 +296,8 @@ def test_clutter_one_records_verdict_reason_and_parks_bad_answers(lib, monkeypat
     got = {r["id"]: tuple(r)[1:] for r in conn.execute("SELECT id, clutter, clutter_conf, clutter_reason FROM files")}
     assert got[ids[0]] == (1, 88, "bare floor") and got[ids[1]] == (-1, None, None)
     assert got[ids[2]] == (0, 70, "a child") and got[ids[3]] == (-1, None, None)
+    at = conn.execute("SELECT asked_at, clutter_at, blur_at FROM files WHERE id=?", (ids[0],)).fetchone()
+    assert at["clutter_at"] and at["clutter_at"] == at["asked_at"] and at["blur_at"] is None
 
 
 def test_side_turns_recheck_first_then_clutter_then_blur(lib, monkeypatch):
